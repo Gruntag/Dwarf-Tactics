@@ -35,40 +35,60 @@ const Index = () => {
           </p>
         </div>
 
-        {/* Dwarf Image */}
-        <div className="flex justify-center mb-16">
-          <div className="relative group">
-            <div className="absolute -inset-2 bg-gradient-to-r from-primary via-accent to-primary rounded-lg blur-xl opacity-75 group-hover:opacity-100 transition-opacity duration-500" />
-            <img
-              src={gruntagDwarf}
-              alt="Gruntag the Angry Dwarf"
-              className="relative rounded-lg w-full max-w-3xl shadow-[var(--shadow-game)] border-4 border-primary/50 group-hover:border-primary transition-all duration-300"
-            />
-          </div>
-        </div>
-
         {/* Minigames Section */}
         <div className="space-y-8">
-          <h2 className="text-3xl md:text-4xl font-bold text-center text-foreground tracking-wide">
+          <h2 className="text-3xl md:text-4xl font-bold text-center text-foreground tracking-wide mb-12">
             CHOOSE YOUR CHALLENGE
           </h2>
           
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-4 max-w-4xl mx-auto">
-            {minigames.map((game) => {
-              const Icon = game.icon;
-              return (
-                <Button
-                  key={game.name}
-                  variant="game"
-                  size="lg"
-                  className="h-16 text-lg group"
-                  onClick={() => console.log(`Navigating to ${game.name}`)}
-                >
-                  <Icon className="w-6 h-6 group-hover:scale-110 transition-transform duration-300" />
-                  {game.name}
-                </Button>
-              );
-            })}
+          <div className="flex flex-col lg:flex-row items-center justify-center gap-8">
+            {/* Left Buttons */}
+            <div className="flex flex-col gap-4 w-full lg:w-64">
+              {minigames.slice(0, 5).map((game) => {
+                const Icon = game.icon;
+                return (
+                  <Button
+                    key={game.name}
+                    variant="game"
+                    size="lg"
+                    className="h-16 text-lg group"
+                    onClick={() => console.log(`Navigating to ${game.name}`)}
+                  >
+                    <Icon className="w-6 h-6 group-hover:scale-110 transition-transform duration-300" />
+                    {game.name}
+                  </Button>
+                );
+              })}
+            </div>
+
+            {/* Dwarf Image */}
+            <div className="relative group flex-shrink-0">
+              <div className="absolute -inset-2 bg-gradient-to-r from-primary via-accent to-primary rounded-lg blur-xl opacity-75 group-hover:opacity-100 transition-opacity duration-500" />
+              <img
+                src={gruntagDwarf}
+                alt="Gruntag the Angry Dwarf"
+                className="relative rounded-lg w-full max-w-md lg:max-w-lg shadow-[var(--shadow-game)] border-4 border-primary/50 group-hover:border-primary transition-all duration-300"
+              />
+            </div>
+
+            {/* Right Buttons */}
+            <div className="flex flex-col gap-4 w-full lg:w-64">
+              {minigames.slice(5, 10).map((game) => {
+                const Icon = game.icon;
+                return (
+                  <Button
+                    key={game.name}
+                    variant="game"
+                    size="lg"
+                    className="h-16 text-lg group"
+                    onClick={() => console.log(`Navigating to ${game.name}`)}
+                  >
+                    <Icon className="w-6 h-6 group-hover:scale-110 transition-transform duration-300" />
+                    {game.name}
+                  </Button>
+                );
+              })}
+            </div>
           </div>
         </div>
 
