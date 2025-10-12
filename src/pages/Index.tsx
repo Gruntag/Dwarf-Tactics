@@ -2,9 +2,16 @@ import { Button } from "@/components/ui/button";
 import { Gamepad2, Sword, Shield, Hammer, Trophy, Coins, Skull, Flame, Crown, Diamond } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import gruntagDwarf from "@/assets/gruntag-dwarf.jpg";
+import { useState, useEffect } from "react";
+import { getVictoryPoints } from "@/lib/victory-points";
 
 const Index = () => {
   const navigate = useNavigate();
+  const [victoryPoints, setVictoryPoints] = useState(0);
+
+  useEffect(() => {
+    setVictoryPoints(getVictoryPoints());
+  }, []);
   const minigames = [
     { name: "Battle Arena", icon: Sword, path: "/battle-arena" },
     { name: "Shield Defense", icon: Shield, path: "/shield-defense" },
@@ -27,6 +34,12 @@ const Index = () => {
       <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-96 h-96 bg-primary/20 rounded-full blur-[100px] animate-pulse z-0" />
       
       <main className="relative z-10 max-w-6xl w-full">
+        {/* Victory Points Display */}
+        <div className="absolute top-0 right-0 flex items-center gap-2 bg-card/80 backdrop-blur px-4 py-2 rounded-lg border border-border/50">
+          <Trophy className="w-5 h-5 text-accent" />
+          <span className="text-lg font-bold text-foreground">{victoryPoints}</span>
+        </div>
+
         {/* Hero Section */}
         <div className="text-center mb-12 space-y-6">
           <h1 className="text-6xl md:text-8xl font-black tracking-tight mb-4 bg-gradient-to-r from-foreground via-primary to-accent bg-clip-text text-transparent drop-shadow-2xl">

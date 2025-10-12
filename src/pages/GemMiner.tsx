@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
-import { ArrowLeft, Diamond, Pickaxe, Users, Zap, TrendingUp } from "lucide-react";
+import { ArrowLeft, Diamond, Pickaxe, Users, Zap, TrendingUp, Trophy } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "@/hooks/use-toast";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { getVictoryPoints, addVictoryPoint } from "@/lib/victory-points";
 
 interface Upgrade {
   id: string;
@@ -16,8 +17,19 @@ interface Upgrade {
   icon: typeof Pickaxe;
 }
 
+const STORAGE_KEY = 'gem_miner_save';
+
+interface GameState {
+  gems: number;
+  totalGemsEarned: number;
+  clickPower: number;
+  gemsPerSecond: number;
+  upgrades: Upgrade[];
+}
+
 const GemMiner = () => {
   const navigate = useNavigate();
+  const [victoryPoints, setVictoryPoints] = useState(getVictoryPoints());
   const [gems, setGems] = useState(0);
   const [totalGemsEarned, setTotalGemsEarned] = useState(0);
   const [clickPower, setClickPower] = useState(1);
@@ -88,10 +100,20 @@ const GemMiner = () => {
               }
             }
 
-            toast({
-              title: "Upgrade Purchased!",
-              description: `${u.name} level ${newLevel}`,
-            });
+            // Check if this is the final upgrade
+            if (u.id === "final" && newLevel === 1) {
+              const newVP = addVictoryPoint();
+              setVictoryPoints(newVP);
+              toast({
+                title: "🏆 VICTORY!",
+                description: `You've conquered the darkness! Victory Points: ${newVP}`,
+              });
+            } else {
+              toast({
+                title: "Upgrade Purchased!",
+                description: `${u.name} level ${newLevel}`,
+              });
+            }
 
             return { ...u, level: newLevel };
           }
@@ -106,6 +128,31 @@ const GemMiner = () => {
       });
     }
   };
+
+  // Load saved game
+  useEffect(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      const state: GameState = JSON.parse(saved);
+      setGems(state.gems);
+      setTotalGemsEarned(state.totalGemsEarned);
+      setClickPower(state.clickPower);
+      setGemsPerSecond(state.gemsPerSecond);
+      setUpgrades(state.upgrades);
+    }
+  }, []);
+
+  // Save game progress
+  useEffect(() => {
+    const state: GameState = {
+      gems,
+      totalGemsEarned,
+      clickPower,
+      gemsPerSecond,
+      upgrades,
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  }, [gems, totalGemsEarned, clickPower, gemsPerSecond, upgrades]);
 
   // Auto-mining effect
   useEffect(() => {
@@ -137,11 +184,18 @@ const GemMiner = () => {
             Back to Menu
           </Button>
           
-          <div className="text-right">
-            <h1 className="text-4xl md:text-6xl font-black text-foreground tracking-tight">
-              GEM MINER
-            </h1>
-            <p className="text-muted-foreground mt-1">Dark Fantasy Idle Mining</p>
+          <div className="flex items-center gap-6">
+            <div className="flex items-center gap-2 bg-card/80 backdrop-blur px-4 py-2 rounded-lg border border-border/50">
+              <Trophy className="w-5 h-5 text-accent" />
+              <span className="text-lg font-bold text-foreground">{victoryPoints}</span>
+            </div>
+            
+            <div className="text-right">
+              <h1 className="text-4xl md:text-6xl font-black text-foreground tracking-tight">
+                GEM MINER
+              </h1>
+              <p className="text-muted-foreground mt-1">Dark Fantasy Idle Mining</p>
+            </div>
           </div>
         </div>
 
@@ -199,49 +253,112 @@ const GemMiner = () => {
           {/* Upgrades Area */}
           <Card className="bg-card/80 backdrop-blur border-border/50 p-8">
             <h2 className="text-2xl font-bold text-foreground mb-6">Dark Upgrades</h2>
-            <div className="space-y-4 max-h-[600px] overflow-y-auto pr-2">
-              {upgrades.map((upgrade, index) => {
-                const Icon = upgrade.icon;
-                const cost = getUpgradeCost(upgrade);
-                const canAfford = gems >= cost;
-                const previousUpgrade = index > 0 ? upgrades[index - 1] : null;
-                const isUnlocked = !previousUpgrade || previousUpgrade.level > 0;
+            <Tabs defaultValue="click" className="w-full">
+              <TabsList className="grid w-full grid-cols-2 mb-6">
+                <TabsTrigger value="click">
+                  <Pickaxe className="w-4 h-4 mr-2" />
+                  Per Click
+                </TabsTrigger>
+                <TabsTrigger value="auto">
+                  <Zap className="w-4 h-4 mr-2" />
+                  Per Second
+                </TabsTrigger>
+              </TabsList>
+              
+              <TabsContent value="click" className="space-y-4 max-h-[520px] overflow-y-auto pr-2">
+                {upgrades
+                  .filter((u) => u.id.startsWith("click"))
+                  .map((upgrade, index, filteredArray) => {
+                    const Icon = upgrade.icon;
+                    const cost = getUpgradeCost(upgrade);
+                    const canAfford = gems >= cost;
+                    const originalIndex = upgrades.findIndex((u) => u.id === upgrade.id);
+                    const previousUpgrade = originalIndex > 0 ? upgrades[originalIndex - 1] : null;
+                    const isUnlocked = !previousUpgrade || previousUpgrade.level > 0;
 
-                if (!isUnlocked) return null;
+                    if (!isUnlocked) return null;
 
-                return (
-                  <Card
-                    key={upgrade.id}
-                    className="bg-card/60 border-border/50 p-4 hover:bg-card/80 transition-all duration-300"
-                  >
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-3">
-                        <div className="bg-primary/20 p-2 rounded-lg">
-                          <Icon className="w-6 h-6 text-primary" />
+                    return (
+                      <Card
+                        key={upgrade.id}
+                        className="bg-card/60 border-border/50 p-4 hover:bg-card/80 transition-all duration-300"
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-3">
+                            <div className="bg-primary/20 p-2 rounded-lg">
+                              <Icon className="w-6 h-6 text-primary" />
+                            </div>
+                            <div>
+                              <h3 className="font-bold text-foreground">{upgrade.name}</h3>
+                              <p className="text-sm text-muted-foreground">{upgrade.description}</p>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-sm text-muted-foreground">Level {upgrade.level}</p>
+                          </div>
                         </div>
-                        <div>
-                          <h3 className="font-bold text-foreground">{upgrade.name}</h3>
-                          <p className="text-sm text-muted-foreground">{upgrade.description}</p>
+                        
+                        <Button
+                          onClick={() => handleUpgrade(upgrade.id)}
+                          disabled={!canAfford}
+                          className="w-full mt-2"
+                          variant={canAfford ? "default" : "outline"}
+                        >
+                          <Diamond className="w-4 h-4 mr-2" />
+                          Buy for {cost.toLocaleString()}
+                        </Button>
+                      </Card>
+                    );
+                  })}
+              </TabsContent>
+              
+              <TabsContent value="auto" className="space-y-4 max-h-[520px] overflow-y-auto pr-2">
+                {upgrades
+                  .filter((u) => u.id.startsWith("auto") || u.id === "final")
+                  .map((upgrade, index, filteredArray) => {
+                    const Icon = upgrade.icon;
+                    const cost = getUpgradeCost(upgrade);
+                    const canAfford = gems >= cost;
+                    const originalIndex = upgrades.findIndex((u) => u.id === upgrade.id);
+                    const previousUpgrade = originalIndex > 0 ? upgrades[originalIndex - 1] : null;
+                    const isUnlocked = !previousUpgrade || previousUpgrade.level > 0;
+
+                    if (!isUnlocked) return null;
+
+                    return (
+                      <Card
+                        key={upgrade.id}
+                        className="bg-card/60 border-border/50 p-4 hover:bg-card/80 transition-all duration-300"
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-3">
+                            <div className="bg-primary/20 p-2 rounded-lg">
+                              <Icon className="w-6 h-6 text-primary" />
+                            </div>
+                            <div>
+                              <h3 className="font-bold text-foreground">{upgrade.name}</h3>
+                              <p className="text-sm text-muted-foreground">{upgrade.description}</p>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-sm text-muted-foreground">Level {upgrade.level}</p>
+                          </div>
                         </div>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-sm text-muted-foreground">Level {upgrade.level}</p>
-                      </div>
-                    </div>
-                    
-                    <Button
-                      onClick={() => handleUpgrade(upgrade.id)}
-                      disabled={!canAfford}
-                      className="w-full mt-2"
-                      variant={canAfford ? "default" : "outline"}
-                    >
-                      <Diamond className="w-4 h-4 mr-2" />
-                      Buy for {cost.toLocaleString()}
-                    </Button>
-                  </Card>
-                );
-              })}
-            </div>
+                        
+                        <Button
+                          onClick={() => handleUpgrade(upgrade.id)}
+                          disabled={!canAfford}
+                          className="w-full mt-2"
+                          variant={canAfford ? "default" : "outline"}
+                        >
+                          <Diamond className="w-4 h-4 mr-2" />
+                          Buy for {cost.toLocaleString()}
+                        </Button>
+                      </Card>
+                    );
+                  })}
+              </TabsContent>
+            </Tabs>
           </Card>
         </div>
       </div>
