@@ -22,45 +22,33 @@ const GemMiner = () => {
   const [totalGemsEarned, setTotalGemsEarned] = useState(0);
   const [clickPower, setClickPower] = useState(1);
   const [gemsPerSecond, setGemsPerSecond] = useState(0);
-  const [miningProgress, setMiningProgress] = useState(0);
 
   const [upgrades, setUpgrades] = useState<Upgrade[]>([
-    {
-      id: "click",
-      name: "Sharper Pickaxe",
-      description: "Increase gems per click",
-      baseCost: 10,
-      level: 0,
-      multiplier: 1.15,
-      icon: Pickaxe,
-    },
-    {
-      id: "auto1",
-      name: "Goblin Miner",
-      description: "+1 gem/sec",
-      baseCost: 50,
-      level: 0,
-      multiplier: 1.2,
-      icon: Users,
-    },
-    {
-      id: "auto2",
-      name: "Dwarf Foreman",
-      description: "+5 gems/sec",
-      baseCost: 500,
-      level: 0,
-      multiplier: 1.25,
-      icon: Zap,
-    },
-    {
-      id: "auto3",
-      name: "Dark Enchantment",
-      description: "+25 gems/sec",
-      baseCost: 5000,
-      level: 0,
-      multiplier: 1.3,
-      icon: TrendingUp,
-    },
+    { id: "click1", name: "Sharper Pickaxe", description: "+1 gem/click", baseCost: 10, level: 0, multiplier: 1.15, icon: Pickaxe },
+    { id: "auto1", name: "Goblin Miner", description: "+1 gem/sec", baseCost: 50, level: 0, multiplier: 1.2, icon: Users },
+    { id: "click2", name: "Iron Pickaxe", description: "+2 gems/click", baseCost: 100, level: 0, multiplier: 1.15, icon: Pickaxe },
+    { id: "auto2", name: "Dwarf Foreman", description: "+5 gems/sec", baseCost: 500, level: 0, multiplier: 1.25, icon: Zap },
+    { id: "click3", name: "Steel Pickaxe", description: "+5 gems/click", baseCost: 1000, level: 0, multiplier: 1.15, icon: Pickaxe },
+    { id: "auto3", name: "Dark Enchantment", description: "+25 gems/sec", baseCost: 5000, level: 0, multiplier: 1.3, icon: TrendingUp },
+    { id: "click4", name: "Mithril Pickaxe", description: "+10 gems/click", baseCost: 10000, level: 0, multiplier: 1.15, icon: Pickaxe },
+    { id: "auto4", name: "Skeleton Crew", description: "+50 gems/sec", baseCost: 25000, level: 0, multiplier: 1.3, icon: Users },
+    { id: "click5", name: "Obsidian Pickaxe", description: "+25 gems/click", baseCost: 50000, level: 0, multiplier: 1.15, icon: Pickaxe },
+    { id: "auto5", name: "Shadow Miners", description: "+100 gems/sec", baseCost: 100000, level: 0, multiplier: 1.35, icon: Zap },
+    { id: "click6", name: "Cursed Pickaxe", description: "+50 gems/click", baseCost: 250000, level: 0, multiplier: 1.15, icon: Pickaxe },
+    { id: "auto6", name: "Necromancer", description: "+250 gems/sec", baseCost: 500000, level: 0, multiplier: 1.35, icon: TrendingUp },
+    { id: "click7", name: "Dragon Pickaxe", description: "+100 gems/click", baseCost: 1000000, level: 0, multiplier: 1.15, icon: Pickaxe },
+    { id: "auto7", name: "Dark Portal", description: "+500 gems/sec", baseCost: 2500000, level: 0, multiplier: 1.4, icon: Users },
+    { id: "click8", name: "Demon Pickaxe", description: "+250 gems/click", baseCost: 5000000, level: 0, multiplier: 1.15, icon: Pickaxe },
+    { id: "auto8", name: "Lich King", description: "+1000 gems/sec", baseCost: 10000000, level: 0, multiplier: 1.4, icon: Zap },
+    { id: "click9", name: "Void Pickaxe", description: "+500 gems/click", baseCost: 25000000, level: 0, multiplier: 1.15, icon: Pickaxe },
+    { id: "auto9", name: "Abyssal Mine", description: "+2500 gems/sec", baseCost: 50000000, level: 0, multiplier: 1.45, icon: TrendingUp },
+    { id: "click10", name: "Cosmic Pickaxe", description: "+1000 gems/click", baseCost: 100000000, level: 0, multiplier: 1.15, icon: Pickaxe },
+    { id: "auto10", name: "Demon Army", description: "+5000 gems/sec", baseCost: 250000000, level: 0, multiplier: 1.45, icon: Users },
+    { id: "click11", name: "Eldritch Pickaxe", description: "+2500 gems/click", baseCost: 500000000, level: 0, multiplier: 1.15, icon: Pickaxe },
+    { id: "auto11", name: "Void Rift", description: "+10000 gems/sec", baseCost: 1000000000, level: 0, multiplier: 1.5, icon: Zap },
+    { id: "click12", name: "Godslayer Pickaxe", description: "+5000 gems/click", baseCost: 2500000000, level: 0, multiplier: 1.15, icon: Pickaxe },
+    { id: "auto12", name: "Apocalypse", description: "+25000 gems/sec", baseCost: 5000000000, level: 0, multiplier: 1.5, icon: TrendingUp },
+    { id: "final", name: "Eternal Darkness", description: "+100000 gems/sec", baseCost: 10000000000, level: 0, multiplier: 1.6, icon: Diamond },
   ]);
 
   // Calculate cost for upgrade
@@ -72,7 +60,6 @@ const GemMiner = () => {
   const handleMine = useCallback(() => {
     setGems((prev) => prev + clickPower);
     setTotalGemsEarned((prev) => prev + clickPower);
-    setMiningProgress(100);
   }, [clickPower]);
 
   // Handle upgrade purchase
@@ -88,15 +75,17 @@ const GemMiner = () => {
           if (u.id === upgradeId) {
             const newLevel = u.level + 1;
             
-            // Update click power or auto-mining
-            if (u.id === "click") {
-              setClickPower((prev) => prev + 1);
-            } else if (u.id === "auto1") {
-              setGemsPerSecond((prev) => prev + 1);
-            } else if (u.id === "auto2") {
-              setGemsPerSecond((prev) => prev + 5);
-            } else if (u.id === "auto3") {
-              setGemsPerSecond((prev) => prev + 25);
+            // Update click power or auto-mining based on description
+            if (u.id.startsWith("click")) {
+              const powerMatch = u.description.match(/\+(\d+)/);
+              if (powerMatch) {
+                setClickPower((prev) => prev + parseInt(powerMatch[1]));
+              }
+            } else if (u.id.startsWith("auto") || u.id === "final") {
+              const powerMatch = u.description.match(/\+(\d+)/);
+              if (powerMatch) {
+                setGemsPerSecond((prev) => prev + parseInt(powerMatch[1]));
+              }
             }
 
             toast({
@@ -129,15 +118,6 @@ const GemMiner = () => {
     }
   }, [gemsPerSecond]);
 
-  // Mining progress animation
-  useEffect(() => {
-    if (miningProgress > 0) {
-      const timeout = setTimeout(() => {
-        setMiningProgress(0);
-      }, 300);
-      return () => clearTimeout(timeout);
-    }
-  }, [miningProgress]);
 
   return (
     <div className="min-h-screen bg-[var(--gradient-game)] p-4 md:p-8 relative overflow-hidden">
@@ -207,10 +187,8 @@ const GemMiner = () => {
                 <Diamond className="w-24 h-24 text-primary group-hover:text-accent transition-colors duration-300" />
               </div>
             </button>
-
-            <Progress value={miningProgress} className="w-full max-w-md h-3" />
             
-            <div className="mt-6 text-center">
+            <div className="mt-8 text-center">
               <p className="text-xl font-semibold text-foreground">
                 <Pickaxe className="inline w-5 h-5 mr-2" />
                 {clickPower} gems per click
@@ -221,11 +199,15 @@ const GemMiner = () => {
           {/* Upgrades Area */}
           <Card className="bg-card/80 backdrop-blur border-border/50 p-8">
             <h2 className="text-2xl font-bold text-foreground mb-6">Dark Upgrades</h2>
-            <div className="space-y-4">
-              {upgrades.map((upgrade) => {
+            <div className="space-y-4 max-h-[600px] overflow-y-auto pr-2">
+              {upgrades.map((upgrade, index) => {
                 const Icon = upgrade.icon;
                 const cost = getUpgradeCost(upgrade);
                 const canAfford = gems >= cost;
+                const previousUpgrade = index > 0 ? upgrades[index - 1] : null;
+                const isUnlocked = !previousUpgrade || previousUpgrade.level > 0;
+
+                if (!isUnlocked) return null;
 
                 return (
                   <Card
