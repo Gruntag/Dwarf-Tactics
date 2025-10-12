@@ -1,8 +1,10 @@
 import { Button } from "@/components/ui/button";
 import { Gamepad2, Sword, Shield, Hammer, Trophy, Coins, Skull, Flame, Crown, Diamond } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import gruntagDwarf from "@/assets/gruntag-dwarf.jpg";
 
 const Index = () => {
+  const navigate = useNavigate();
   const minigames = [
     { name: "Battle Arena", icon: Sword, path: "/battle-arena" },
     { name: "Shield Defense", icon: Shield, path: "/shield-defense" },
@@ -52,7 +54,7 @@ const Index = () => {
                     variant="game"
                     size="lg"
                     className="h-16 text-lg group"
-                    onClick={() => console.log(`Navigating to ${game.name}`)}
+                    onClick={() => game.path && navigate(game.path)}
                   >
                     <Icon className="w-6 h-6 group-hover:scale-110 transition-transform duration-300" />
                     {game.name}
@@ -81,7 +83,7 @@ const Index = () => {
                     variant="game"
                     size="lg"
                     className="h-16 text-lg group"
-                    onClick={() => console.log(`Navigating to ${game.name}`)}
+                    onClick={() => game.path && navigate(game.path)}
                   >
                     <Icon className="w-6 h-6 group-hover:scale-110 transition-transform duration-300" />
                     {game.name}
