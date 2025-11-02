@@ -19,6 +19,11 @@ const router = createRouter({
       component: () => import("@/pages/ForgeMaster.vue"),
     },
     {
+      path: "/skull-crusher",
+      name: "skull-crusher",
+      component: () => import("@/pages/SkullCrusher.vue"),
+    },
+    {
       path: "/:pathMatch(.*)*",
       name: "not-found",
       component: () => import("@/pages/NotFound.vue"),
