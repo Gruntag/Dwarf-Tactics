@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
-import { ArrowLeft, Diamond, Flame, Hammer, Skull, Timer, Trophy } from "lucide-vue-next";
+import { ArrowLeft, Flame, Hammer, Skull, Timer, Trophy } from "lucide-vue-next";
 import { addVictoryPoint, getVictoryPoints } from "@/lib/victory-points";
 import { toast } from "@/composables/useToast";
 
@@ -268,151 +268,177 @@ const goblinStyle = (goblin: Goblin) => ({
 });
 
 const backButtonClasses =
-  "group inline-flex items-center gap-2 rounded-md border border-border/60 bg-card/70 px-4 py-2 text-sm font-semibold text-foreground transition hover:bg-card focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background";
+  "group inline-flex items-center gap-2 rounded-md border border-border bg-card/70 px-4 py-2 text-sm font-semibold text-foreground transition hover:bg-card focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-primary";
 </script>
 
 <template>
   <div class="relative min-h-screen overflow-hidden bg-[var(--gradient-game)] p-4 md:p-8">
-    <div class="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(10,10,10,0.5),transparent_75%)]" />
-    <div class="relative z-10 mx-auto grid max-w-6xl gap-6 lg:grid-cols-[2fr_1fr]">
-      <section class="rounded-xl border border-border/60 bg-card/80 p-6 backdrop-blur">
-        <header class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 class="text-3xl font-black text-foreground sm:text-4xl">Skull Crusher</h1>
-            <p class="text-sm text-muted-foreground">
-              Whack the goblins before they run! Keep your combo alive to rack up points.
-            </p>
-          </div>
+    <div class="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(10,10,10,0.5),transparent_70%)]" />
+    <div class="pointer-events-none absolute left-1/2 top-1/3 h-[520px] w-[520px] -translate-x-1/2 rounded-full bg-primary/20 blur-[120px]" />
 
-          <div class="flex items-center gap-3">
-            <div class="flex items-center gap-2 rounded-lg border border-border/60 bg-card/80 px-3 py-2 text-sm font-semibold text-foreground backdrop-blur">
+    <div class="relative z-10 mx-auto max-w-6xl space-y-8">
+      <header class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <button type="button" :class="backButtonClasses" @click="backToMenu">
+          <ArrowLeft class="h-5 w-5 transition group-hover:-translate-x-1" />
+          Back to Menu
+        </button>
+
+        <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div class="rounded-lg border border-border/60 bg-card/80 px-4 py-3 backdrop-blur">
+            <div class="flex items-center gap-2 text-xs uppercase tracking-widest text-muted-foreground">
+              <Trophy class="h-4 w-4 text-accent" />
+              Victory Points
+            </div>
+            <p class="mt-1 text-2xl font-semibold text-foreground">{{ victoryPoints.toLocaleString() }}</p>
+          </div>
+          <div class="rounded-lg border border-border/60 bg-card/80 px-4 py-3 backdrop-blur">
+            <div class="flex items-center gap-2 text-xs uppercase tracking-widest text-muted-foreground">
               <Skull class="h-4 w-4 text-accent" />
-              <span>{{ score.toFixed(0) }} pts</span>
+              Score
             </div>
-            <div class="flex items-center gap-2 rounded-lg border border-border/60 bg-card/80 px-3 py-2 text-sm font-semibold text-foreground backdrop-blur">
+            <p class="mt-1 text-2xl font-semibold text-foreground">{{ score.toFixed(0) }}</p>
+          </div>
+          <div class="rounded-lg border border-border/60 bg-card/80 px-4 py-3 backdrop-blur">
+            <div class="flex items-center gap-2 text-xs uppercase tracking-widest text-muted-foreground">
               <Timer class="h-4 w-4 text-primary" />
-              <span>{{ timeRemaining }}s</span>
+              Time Left
             </div>
-            <div class="flex items-center gap-2 rounded-lg border border-border/60 bg-card/80 px-3 py-2 text-sm font-semibold text-foreground backdrop-blur">
+            <p class="mt-1 text-2xl font-semibold text-foreground">{{ Math.max(timeRemaining, 0) }}s</p>
+          </div>
+          <div class="rounded-lg border border-border/60 bg-card/80 px-4 py-3 backdrop-blur">
+            <div class="flex items-center gap-2 text-xs uppercase tracking-widest text-muted-foreground">
               <Flame class="h-4 w-4 text-accent" />
-              <span>Combo: {{ combo }}</span>
+              Combo
             </div>
+            <p class="mt-1 text-2xl font-semibold text-foreground">x{{ combo }}</p>
           </div>
-        </header>
+        </div>
+      </header>
 
-        <div class="mt-8">
-          <div class="relative aspect-[4/3] w-full overflow-hidden rounded-2xl border border-border/60 bg-gradient-to-br from-black/60 via-slate-900/70 to-black/60 p-4 shadow-[inset_0_0_48px_rgba(0,0,0,0.55)]">
-            <div class="absolute inset-0 bg-[radial-gradient(circle_at_bottom,rgba(34,197,94,0.05),transparent_55%)]" />
-            <div
-              class="relative grid h-full w-full gap-2"
-              :style="gridStyle"
-            >
-              <button
-                v-for="slot in gridSlots"
-                :key="slot.key"
-                type="button"
-                class="relative isolate flex items-end justify-center overflow-hidden rounded-xl border border-border/40 bg-card/40 transition hover:border-primary/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-                :class="[
-                  'holo-cell',
-                ]"
-                @click="handleHit(slot.row, slot.col)"
-              >
-                <div class="pointer-events-none absolute inset-0 bg-gradient-to-t from-primary/10 via-transparent to-transparent opacity-0 transition group-hover:opacity-30" />
-                <transition-group name="goblin" tag="div">
-                  <div
-                    v-for="goblin in goblins.filter((g) => g.row === slot.row && g.col === slot.col)"
-                    :key="goblin.id"
-                    class="relative flex h-full w-full items-center justify-center"
+      <div class="grid gap-6 lg:grid-cols-[2fr_1fr]">
+        <section class="rounded-xl border border-border/60 bg-card/80 p-6 backdrop-blur">
+          <div class="flex flex-col gap-6">
+            <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div class="flex items-center gap-4">
+                <div class="flex h-12 w-12 items-center justify-center rounded-full bg-primary/20">
+                  <Hammer class="h-6 w-6 text-primary" />
+                </div>
+                <div>
+                  <h1 class="text-4xl font-black tracking-tight text-foreground">Skull Crusher</h1>
+                  <p class="text-sm text-muted-foreground">
+                    Whack the goblins before they escape. Keep combos alive to climb the leaderboard.
+                  </p>
+                </div>
+              </div>
+              <div class="rounded-lg border border-border/60 bg-card/70 px-4 py-3 text-sm text-muted-foreground backdrop-blur">
+                Crush goblins as fast as you can. Higher levels spawn more foes and shorten their patience.
+              </div>
+            </div>
+
+            <div class="relative mx-auto w-full max-w-4xl">
+              <div class="relative aspect-[4/3] w-full overflow-hidden rounded-2xl border border-border/60 bg-gradient-to-br from-black/60 via-slate-900/70 to-black/60 p-6 shadow-[inset_0_0_48px_rgba(0,0,0,0.55)]">
+                <div class="absolute inset-0 bg-[radial-gradient(circle_at_bottom,rgba(34,197,94,0.05),transparent_55%)]" />
+                <div class="relative grid h-full w-full gap-2" :style="gridStyle">
+                  <button
+                    v-for="slot in gridSlots"
+                    :key="slot.key"
+                    type="button"
+                    class="group relative isolate flex items-end justify-center overflow-hidden rounded-xl border border-border/40 bg-card/40 transition hover:border-primary/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-accent focus-visible:ring-offset-background"
+                    :class="['holo-cell']"
+                    @click="handleHit(slot.row, slot.col)"
                   >
-                    <div
-                      class="goblin flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-lime-500 via-green-600 to-emerald-700 shadow-[0_12px_24px_rgba(16,185,129,0.35)] ring-2 ring-lime-300/70"
-                      :class="goblinStates[goblin.state]"
-                      :style="goblinStyle(goblin)"
-                    >
-                      <Skull class="h-10 w-10 -translate-y-0.5 text-black/80 drop-shadow-[0_4px_6px_rgba(0,0,0,0.45)]" />
+                    <div class="pointer-events-none absolute inset-0 bg-gradient-to-t from-primary/10 via-transparent to-transparent opacity-0 transition group-hover:opacity-30" />
+                    <transition-group name="goblin" tag="div">
                       <div
-                        v-if="goblin.state === 'hit'"
-                        class="absolute inset-0 rounded-full bg-white/30 mix-blend-overlay animate-ping-slow"
-                      />
-                    </div>
-                    <div
-                      class="absolute bottom-2 rounded-full border border-border/50 bg-card/60 px-2 text-xs text-muted-foreground backdrop-blur"
-                    >
-                      {{ goblin.state }}
-                    </div>
-                  </div>
-                </transition-group>
-              </button>
+                        v-for="goblin in goblins.filter((g) => g.row === slot.row && g.col === slot.col)"
+                        :key="goblin.id"
+                        class="relative flex h-full w-full items-center justify-center"
+                      >
+                        <div
+                          class="goblin relative flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-lime-500 via-green-600 to-emerald-700 shadow-[0_12px_24px_rgba(16,185,129,0.35)] ring-2 ring-lime-300/70"
+                          :class="goblinStates[goblin.state]"
+                          :style="goblinStyle(goblin)"
+                        >
+                          <Skull class="h-10 w-10 -translate-y-0.5 text-black/80 drop-shadow-[0_4px_6px_rgba(0,0,0,0.45)]" />
+                          <div
+                            v-if="goblin.state === 'hit'"
+                            class="absolute inset-0 rounded-full bg-white/30 mix-blend-overlay animate-ping-slow"
+                          />
+                        </div>
+                        <div class="absolute bottom-2 rounded-full border border-border/50 bg-card/70 px-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground backdrop-blur">
+                          {{ goblin.state }}
+                        </div>
+                      </div>
+                    </transition-group>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="flex flex-wrap items-center justify-between gap-4 text-sm text-muted-foreground">
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="inline-flex items-center gap-1 rounded-full border border-border/60 bg-card/70 px-3 py-1">
+                  Level {{ currentLevel }}
+                </span>
+                <span class="hidden sm:inline">&bull;</span>
+                <span>Speed: {{ (1000 / settings.spawnIntervalMs).toFixed(2) }} goblins/s</span>
+                <span>&bull;</span>
+                <span>Grid: {{ settings.rows }} x {{ settings.cols }}</span>
+                <span v-if="settings.hitRadius > 0">&bull; Hammer reach: {{ settings.hitRadius }}</span>
+              </div>
+
+              <div class="flex items-center gap-3">
+                <button
+                  v-if="!isRunning"
+                  type="button"
+                  class="inline-flex items-center gap-2 rounded-md bg-gradient-to-r from-primary via-accent to-primary px-5 py-2 text-sm font-semibold text-primary-foreground shadow-lg transition hover:from-primary/90 hover:via-accent/90 hover:to-primary/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-accent"
+                  @click="startGame"
+                >
+                  <Hammer class="h-4 w-4" />
+                  Start Crushing
+                </button>
+                <button
+                  v-else
+                  type="button"
+                  class="inline-flex items-center gap-2 rounded-md border border-destructive/60 bg-destructive/20 px-5 py-2 text-sm font-semibold text-destructive transition hover:bg-destructive/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-destructive"
+                  @click="endGame"
+                >
+                  Stop Round
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        </section>
 
-        <div class="mt-6 flex flex-wrap items-center justify-between gap-4">
-          <div class="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-            <span>Level {{ currentLevel }}</span>
-            <span>&bull;</span>
-            <span>Speed: {{ (1000 / settings.spawnIntervalMs).toFixed(2) }} goblins/s</span>
-            <span>&bull;</span>
-            <span>Slots: {{ settings.rows }} x {{ settings.cols }}</span>
-            <span v-if="settings.hitRadius > 0">&bull; Hammer reach: {{ settings.hitRadius }}</span>
-          </div>
+        <aside class="rounded-xl border border-border/60 bg-card/70 p-6 text-sm text-muted-foreground backdrop-blur">
+          <header class="flex items-center justify-between">
+            <h2 class="text-lg font-semibold text-foreground">War Table</h2>
+            <div class="flex items-center gap-2 rounded-lg border border-border/60 bg-card/80 px-3 py-1 text-xs font-semibold text-foreground">
+              <Skull class="h-4 w-4 text-accent" />
+              VP: {{ victoryPoints }}
+            </div>
+          </header>
 
-          <div class="flex items-center gap-3">
-            <button
-              type="button"
-              class="inline-flex items-center gap-2 rounded-md border border-border/60 bg-card/80 px-4 py-2 text-sm font-semibold text-foreground transition hover:border-accent hover:text-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-              @click="backToMenu"
-            >
-              <Swords class="h-4 w-4" />
-              Back to Arena
-            </button>
-            <button
-              v-if="!isRunning"
-              type="button"
-              class="inline-flex items-center gap-2 rounded-md bg-gradient-to-r from-primary via-accent to-primary px-5 py-2 text-sm font-semibold text-primary-foreground shadow-lg transition hover:from-primary/90 hover:via-accent/90 hover:to-primary/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-              @click="startGame"
-            >
-              <Hammer class="h-4 w-4" />
-              Start Crushing
-            </button>
-            <button
-              v-else
-              type="button"
-              class="inline-flex items-center gap-2 rounded-md border border-destructive/60 bg-destructive/20 px-5 py-2 text-sm font-semibold text-destructive transition hover:bg-destructive/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-destructive focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-              @click="endGame"
-            >
-              Stop Round
-            </button>
-          </div>
-        </div>
-      </section>
+          <div class="mt-4 space-y-4">
+            <div class="rounded-lg border border-border/60 bg-card/60 p-4">
+              <h3 class="text-sm font-semibold text-foreground">Round Stats</h3>
+              <ul class="mt-2 space-y-1 text-xs">
+                <li>Score: {{ score.toFixed(0) }}</li>
+                <li>High Combo: {{ highCombo }}</li>
+                <li>Missed Goblins: {{ misses }}</li>
+                <li>Spawn Interval: {{ settings.spawnIntervalMs }} ms</li>
+              </ul>
+            </div>
 
-      <aside class="rounded-xl border border-border/60 bg-card/70 p-6 text-sm text-muted-foreground backdrop-blur">
-        <header class="flex items-center justify-between">
-          <h2 class="text-lg font-semibold text-foreground">War Table</h2>
-          <div class="flex items-center gap-2 rounded-lg border border-border/60 bg-card/80 px-3 py-1 text-xs font-semibold text-foreground">
-            <Skull class="h-4 w-4 text-accent" />
-            VP: {{ victoryPoints }}
+            <div class="rounded-lg border border-border/60 bg-card/60 p-4">
+              <h3 class="text-sm font-semibold text-foreground">Tips</h3>
+              <p class="mt-2 text-xs leading-relaxed">
+                Goblins enter, taunt, and sprint. Keep combos alive for bonus points. Upgrade your hammer reach to smash multiple goblins at once.
+              </p>
+            </div>
           </div>
-        </header>
-        <div class="mt-4 space-y-3">
-          <div class="rounded-lg border border-border/60 bg-card/60 p-4">
-            <h3 class="text-sm font-semibold text-foreground">Round Stats</h3>
-            <ul class="mt-2 space-y-1 text-xs">
-              <li>Score: {{ score.toFixed(0) }}</li>
-              <li>High Combo: {{ highCombo }}</li>
-              <li>Missed Goblins: {{ misses }}</li>
-              <li>Spawn Interval: {{ settings.spawnIntervalMs }} ms</li>
-            </ul>
-          </div>
-          <div class="rounded-lg border border-border/60 bg-card/60 p-4">
-            <h3 class="text-sm font-semibold text-foreground">Tips</h3>
-            <p class="mt-2 text-xs leading-relaxed">
-              Goblins enter, taunt, and sprint. Keep combos alive for bonus points. Upgrade your hammer reach to smash multiple goblins at once.
-            </p>
-          </div>
-        </div>
-      </aside>
+        </aside>
+      </div>
     </div>
   </div>
 </template>

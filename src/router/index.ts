@@ -14,9 +14,29 @@ const router = createRouter({
       component: () => import("@/pages/GemMiner.vue"),
     },
     {
+      path: "/battle-arena",
+      name: "battle-arena",
+      component: () => import("@/pages/BattleArena.vue"),
+    },
+    {
       path: "/forge-master",
       name: "forge-master",
       component: () => import("@/pages/ForgeMaster.vue"),
+    },
+    {
+      path: "/trophy-hunt",
+      name: "trophy-hunt",
+      component: () => import("@/pages/TrophyHunt.vue"),
+    },
+    {
+      path: "/shield-defense",
+      name: "shield-defense",
+      component: () => import("@/pages/ShieldDefense.vue"),
+    },
+    {
+      path: "/gold-rush",
+      name: "gold-rush",
+      component: () => import("@/pages/GoldRush.vue"),
     },
     {
       path: "/skull-crusher",

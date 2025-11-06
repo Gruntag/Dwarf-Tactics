@@ -16,8 +16,8 @@ const variantClasses = computed(() => {
 </script>
 
 <template>
-  <div class="pointer-events-none fixed inset-0 flex flex-col items-end justify-start px-4 py-6 sm:p-6">
-    <TransitionGroup tag="div" name="toast" class="flex w-full flex-col gap-3 sm:max-w-sm">
+  <div class="pointer-events-none fixed inset-0 z-[120] flex flex-col items-center justify-start px-4 py-6 sm:p-6">
+    <TransitionGroup tag="div" name="toast" class="flex w-full max-w-md flex-col gap-3">
       <div
         v-for="toast in toasts"
         :key="toast.id"
