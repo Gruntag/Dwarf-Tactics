@@ -44,6 +44,21 @@ const router = createRouter({
       component: () => import("@/pages/SkullCrusher.vue"),
     },
     {
+      path: "/dragon-fire",
+      name: "dragon-fire",
+      component: () => import("@/pages/DragonFire.vue"),
+    },
+    {
+      path: "/loot-train",
+      name: "loot-train",
+      component: () => import("@/pages/LootTrain.vue"),
+    },
+    {
+      path: "/warriors-challenge",
+      name: "warriors-challenge",
+      component: () => import("@/pages/WarriorsChallenge.vue"),
+    },
+    {
       path: "/:pathMatch(.*)*",
       name: "not-found",
       component: () => import("@/pages/NotFound.vue"),
