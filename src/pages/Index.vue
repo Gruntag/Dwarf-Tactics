@@ -10,7 +10,6 @@ import {
   Coins,
   Skull,
   Flame,
-  Crown,
   Diamond,
   Train,
 } from "lucide-vue-next";
@@ -42,12 +41,6 @@ const minigames: Minigame[] = [
   { name: "Gem Miner", icon: Diamond, path: "/gem-miner" },
   { name: "Warrior's Challenge", icon: Gamepad2, path: "/warriors-challenge" },
 ];
-
-const mountainKingGame: Minigame = {
-  name: "Mountain King",
-  icon: Crown,
-  path: "/mountain-king",
-};
 
 const buttonClasses =
   "group flex h-16 items-center justify-center gap-3 rounded-lg border border-primary/40 bg-gradient-to-r from-primary/20 via-primary/30 to-primary/10 px-6 text-lg font-semibold uppercase tracking-wide text-foreground transition duration-300 hover:from-primary/40 hover:to-primary/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-primary";
@@ -102,22 +95,8 @@ const handleNavigate = (path?: string) => {
           </div>
 
           <div class="group relative flex-shrink-0">
-            <div class="mb-6 flex justify-center">
-              <button
-                type="button"
-                :class="buttonClasses"
-                @click="handleNavigate(mountainKingGame.path)"
-              >
-                <component
-                  :is="mountainKingGame.icon"
-                  class="h-6 w-6 transition-transform duration-300 group-hover:scale-110"
-                />
-                {{ mountainKingGame.name }}
-              </button>
-            </div>
-
             <div
-              class="absolute -inset-2 rounded-lg bg-gradient-to-r from-primary via-accent to-primary opacity-75 blur-xl transition-opacity duration-500 group-hover:opacity-100"
+              class="absolute inset-x-6 -top-6 bottom-6 rounded-lg bg-gradient-to-r from-primary via-accent to-primary opacity-75 blur-xl transition-opacity duration-500 group-hover:opacity-100"
             />
             <img
               :src="gruntagDwarf"
