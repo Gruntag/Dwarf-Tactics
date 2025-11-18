@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ArrowLeft, Flame, Hammer, Skull, Timer, Trophy } from "lucide-vue-next";
-import { addVictoryPoint, getVictoryPoints } from "@/lib/victory-points";
+import { addResource, getResourceCount, RESOURCES } from "@/lib/resources";
 import { toast } from "@/composables/useToast";
 
 const router = useRouter();
@@ -31,7 +31,9 @@ const baseSettings: GridSettings = {
   hitRadius: 0,
 };
 
-const victoryPoints = ref(getVictoryPoints());
+const SKULL_RESOURCE_KEY = "skullCrusher" as const;
+const skullResource = RESOURCES[SKULL_RESOURCE_KEY];
+const skullShards = ref(getResourceCount(SKULL_RESOURCE_KEY));
 const currentLevel = ref(1);
 const combo = ref(0);
 const score = ref(0);
@@ -235,11 +237,11 @@ const endGame = () => {
     description: `You smashed ${goblinsCleared} goblins. High combo: ${highCombo.value}.`,
   });
   if (goblinsCleared >= 60) {
-    const newTotal = addVictoryPoint();
-    victoryPoints.value = newTotal;
+    const newTotal = addResource(SKULL_RESOURCE_KEY);
+    skullShards.value = newTotal;
     toast({
-      title: "Victory Point Earned!",
-      description: `Gruntag honors your skull crushing prowess. Total VP: ${newTotal}`,
+      title: `${skullResource.singular} Earned!`,
+      description: `Gruntag honors your skull crushing prowess. Total ${skullResource.plural}: ${newTotal}`,
       variant: "success",
     });
   }
@@ -287,9 +289,9 @@ const backButtonClasses =
           <div class="rounded-lg border border-border/60 bg-card/80 px-4 py-3 backdrop-blur">
             <div class="flex items-center gap-2 text-xs uppercase tracking-widest text-muted-foreground">
               <Trophy class="h-4 w-4 text-accent" />
-              Victory Points
+              {{ skullResource.plural }}
             </div>
-            <p class="mt-1 text-2xl font-semibold text-foreground">{{ victoryPoints.toLocaleString() }}</p>
+            <p class="mt-1 text-2xl font-semibold text-foreground">{{ skullShards.toLocaleString() }}</p>
           </div>
           <div class="rounded-lg border border-border/60 bg-card/80 px-4 py-3 backdrop-blur">
             <div class="flex items-center gap-2 text-xs uppercase tracking-widest text-muted-foreground">
@@ -415,7 +417,7 @@ const backButtonClasses =
             <h2 class="text-lg font-semibold text-foreground">War Table</h2>
             <div class="flex items-center gap-2 rounded-lg border border-border/60 bg-card/80 px-3 py-1 text-xs font-semibold text-foreground">
               <Skull class="h-4 w-4 text-accent" />
-              VP: {{ victoryPoints }}
+              {{ skullResource.singular }}: {{ skullShards }}
             </div>
           </header>
 

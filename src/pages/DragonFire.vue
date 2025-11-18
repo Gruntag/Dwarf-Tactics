@@ -1,7 +1,7 @@
 ﻿<script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
-import { addVictoryPoint, getVictoryPoints } from "@/lib/victory-points";
+import { addResource, getResourceCount, RESOURCES } from "@/lib/resources";
 import { toast } from "@/composables/useToast";
 import { ArrowLeft, Flame, Shield, Sparkles, Timer, Trophy, Zap } from "lucide-vue-next";
 
@@ -37,7 +37,9 @@ const laneKeyMap = laneConfigs.reduce((acc, lane) => {
 }, {} as Record<string, number>);
 
 const phase = ref<Phase>("ready");
-const victoryPoints = ref(getVictoryPoints());
+const DRAGON_RESOURCE_KEY = "dragonFire" as const;
+const emberResource = RESOURCES[DRAGON_RESOURCE_KEY];
+const emberShards = ref(getResourceCount(DRAGON_RESOURCE_KEY));
 const barrierIntegrity = ref(100);
 const deflectedCount = ref(0);
 const combo = ref(0);
@@ -406,15 +408,15 @@ watch(
   () => phase.value,
   (next) => {
     if (next === "running") {
-      victoryPoints.value = getVictoryPoints();
+      emberShards.value = getResourceCount(DRAGON_RESOURCE_KEY);
     }
 
     if (next === "victory" && !pointGranted) {
-      victoryPoints.value = addVictoryPoint();
+      emberShards.value = addResource(DRAGON_RESOURCE_KEY);
       pointGranted = true;
       toast({
-        title: "Dragon Fire Conquered",
-        description: "Flame bows to your command. Victory point secured.",
+        title: `${emberResource.plural} Secured`,
+        description: `Flame bows to your command. ${emberResource.singular} captured.`,
         variant: "success",
       });
     }
@@ -423,7 +425,7 @@ watch(
 
 onMounted(() => {
   window.addEventListener("keydown", handleKeydown);
-  victoryPoints.value = getVictoryPoints();
+  emberShards.value = getResourceCount(DRAGON_RESOURCE_KEY);
 });
 
 onBeforeUnmount(() => {
@@ -445,9 +447,12 @@ onBeforeUnmount(() => {
             Return
           </button>
 
-          <div class="flex items-center gap-2 rounded-lg border border-primary/30 bg-card/80 px-4 py-2 text-sm font-semibold text-foreground backdrop-blur">
+          <div class="flex items-center gap-2 rounded-lg border border-primary/30 bg-card/80 px-4 py-2 text-sm text-foreground backdrop-blur">
             <Trophy class="h-5 w-5 text-accent" />
-            <span>{{ victoryPoints }}</span>
+            <div class="flex flex-col leading-tight text-right">
+              <span class="text-[10px] uppercase tracking-widest text-muted-foreground">{{ emberResource.plural }}</span>
+              <span class="text-lg font-semibold text-foreground">{{ emberShards }}</span>
+            </div>
           </div>
         </div>
 

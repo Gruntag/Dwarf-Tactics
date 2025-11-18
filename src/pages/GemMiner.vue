@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch, type Component } from "vue";
 import { useRouter } from "vue-router";
 import { toast } from "@/composables/useToast";
-import { getVictoryPoints, addVictoryPoint } from "@/lib/victory-points";
+import { addResource, getResourceCount, RESOURCES } from "@/lib/resources";
 import {
   ArrowLeft,
   Diamond,
@@ -75,7 +75,9 @@ const upgradeTemplates: UpgradeTemplate[] = [
 ];
 
 const router = useRouter();
-const victoryPoints = ref(getVictoryPoints());
+const GEM_RESOURCE_KEY = "gemMiner" as const;
+const gemResource = RESOURCES[GEM_RESOURCE_KEY];
+const gemCaches = ref(getResourceCount(GEM_RESOURCE_KEY));
 const gems = ref(0);
 const totalGemsEarned = ref(0);
 const clickPower = ref(1);
@@ -139,11 +141,11 @@ const purchaseUpgrade = (id: string) => {
   } else {
     gemsPerSecond.value += upgrade.bonus;
     if (upgrade.category === "final" && upgrade.level === 1) {
-      const newTotal = addVictoryPoint();
-      victoryPoints.value = newTotal;
+      const newTotal = addResource(GEM_RESOURCE_KEY);
+      gemCaches.value = newTotal;
       toast({
         title: "VICTORY!",
-        description: `You've conquered the darkness. Victory Points: ${newTotal}`,
+        description: `You've conquered the darkness. ${gemResource.plural}: ${newTotal}`,
         variant: "success",
       });
     } else {
@@ -253,9 +255,12 @@ const upgradeButtonClasses = (enabled: boolean) =>
         </button>
 
         <div class="flex flex-col items-end gap-4 md:flex-row md:items-center md:gap-6">
-          <div class="flex items-center gap-2 rounded-lg border border-border/50 bg-card/80 px-4 py-2 backdrop-blur">
+          <div class="flex items-center gap-2 rounded-lg border border-border/50 bg-card/80 px-4 py-2 text-foreground backdrop-blur">
             <Trophy class="h-5 w-5 text-accent" />
-            <span class="text-lg font-bold text-foreground">{{ victoryPoints }}</span>
+            <div class="flex flex-col leading-tight text-right">
+              <span class="text-[10px] uppercase tracking-widest text-muted-foreground">{{ gemResource.plural }}</span>
+              <span class="text-lg font-bold text-foreground">{{ gemCaches }}</span>
+            </div>
           </div>
 
           <div class="text-right">

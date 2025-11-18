@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, type Component } from "vue";
 import { useRouter } from "vue-router";
 import { ArrowLeft, Crosshair, Flame, Hammer, HeartPulse, Snowflake, Sparkles, Sun, Target, Timer, Trophy } from "lucide-vue-next";
-import { addVictoryPoint, getVictoryPoints } from "@/lib/victory-points";
+import { addResource, getResourceCount, RESOURCES } from "@/lib/resources";
 import { toast } from "@/composables/useToast";
 
 type Phase = "ready" | "running" | "paused" | "victory" | "game-over";
@@ -82,7 +82,9 @@ const BOARD_WIDTH = 960;
 const BOARD_HEIGHT = 640;
 const PLAYER_RADIUS = 18;
 
-const victoryPoints = ref(getVictoryPoints());
+const ARENA_RESOURCE_KEY = "battleArena" as const;
+const arenaResource = RESOURCES[ARENA_RESOURCE_KEY];
+const arenaCrests = ref(getResourceCount(ARENA_RESOURCE_KEY));
 const phase = ref<Phase>("ready");
 const score = ref(0);
 const elapsedMs = ref(0);
@@ -780,11 +782,11 @@ const updateLoop = (timestamp: number) => {
   if (elapsedMs.value >= timeToSurviveMs) {
     phase.value = "victory";
     animationHandle = null;
-    const newTotal = addVictoryPoint();
-    victoryPoints.value = newTotal;
+    const newTotal = addResource(ARENA_RESOURCE_KEY);
+    arenaCrests.value = newTotal;
     toast({
-      title: "Arena Master",
-      description: `You survived the full assault and earned a victory point. Total VP: ${newTotal}`,
+      title: arenaResource.plural,
+      description: `You survived the full assault and earned an ${arenaResource.singular}. Total ${arenaResource.plural}: ${newTotal}`,
       variant: "success",
     });
     return;
@@ -926,9 +928,9 @@ onBeforeUnmount(() => {
           <div class="rounded-lg border border-border/60 bg-card/80 px-4 py-3 backdrop-blur">
             <div class="flex items-center gap-2 text-xs uppercase tracking-widest text-muted-foreground">
               <Trophy class="h-4 w-4 text-accent" />
-              Victory Points
+              {{ arenaResource.plural }}
             </div>
-            <p class="mt-1 text-2xl font-semibold text-foreground">{{ victoryPoints.toLocaleString() }}</p>
+            <p class="mt-1 text-2xl font-semibold text-foreground">{{ arenaCrests.toLocaleString() }}</p>
           </div>
           <div class="rounded-lg border border-border/60 bg-card/80 px-4 py-3 backdrop-blur">
             <div class="flex items-center gap-2 text-xs uppercase tracking-widest text-muted-foreground">
@@ -1158,7 +1160,7 @@ onBeforeUnmount(() => {
             <div class="rounded-lg border border-border/60 bg-card/60 p-4">
               <h3 class="text-sm font-semibold text-foreground">Objective</h3>
               <p class="mt-2 text-xs leading-relaxed">
-                Survive for {{ Math.floor(timeToSurviveMs / 1000) }} seconds to claim a victory point. Every enemy crushed fuels Gruntag's legend.
+                Survive for {{ Math.floor(timeToSurviveMs / 1000) }} seconds to claim an {{ arenaResource.singular.toLowerCase() }}. Every enemy crushed fuels Gruntag's legend.
               </p>
             </div>
           </div>

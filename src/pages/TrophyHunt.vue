@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
-import { addVictoryPoint, getVictoryPoints } from "@/lib/victory-points";
+import { addResource, getResourceCount, RESOURCES } from "@/lib/resources";
 import { toast } from "@/composables/useToast";
 import { ArrowLeft, Crosshair, Flame, Sparkles, Target, Timer, Trophy } from "lucide-vue-next";
 
@@ -41,7 +41,9 @@ const HUNT_DURATION_MS = 75_000;
 
 const router = useRouter();
 
-const victoryPoints = ref(getVictoryPoints());
+const TROPHY_RESOURCE_KEY = "trophyHunt" as const;
+const hunterResource = RESOURCES[TROPHY_RESOURCE_KEY];
+const hunterTrophies = ref(getResourceCount(TROPHY_RESOURCE_KEY));
 const phase = ref<Phase>("ready");
 const score = ref(0);
 const shotsFired = ref(0);
@@ -276,11 +278,11 @@ const finishHunt = (success: boolean) => {
     animationHandle = null;
   }
   if (success) {
-    const newTotal = addVictoryPoint();
-    victoryPoints.value = newTotal;
+    const newTotal = addResource(TROPHY_RESOURCE_KEY);
+    hunterTrophies.value = newTotal;
     toast({
       title: "Trophies Secured",
-      description: `Gruntag awards you a victory point. Total VP: ${newTotal}`,
+      description: `Gruntag awards you a ${hunterResource.singular.toLowerCase()}. Total ${hunterResource.plural}: ${newTotal}`,
       variant: "success",
     });
   } else {
@@ -391,9 +393,9 @@ onBeforeUnmount(() => {
           <div class="rounded-lg border border-border/60 bg-card/80 px-4 py-3 backdrop-blur">
             <div class="flex items-center gap-2 text-xs uppercase tracking-widest text-muted-foreground">
               <Trophy class="h-4 w-4 text-accent" />
-              Victory Points
+              {{ hunterResource.plural }}
             </div>
-            <p class="mt-1 text-2xl font-semibold text-foreground">{{ victoryPoints.toLocaleString() }}</p>
+            <p class="mt-1 text-2xl font-semibold text-foreground">{{ hunterTrophies.toLocaleString() }}</p>
           </div>
           <div class="rounded-lg border border-border/60 bg-card/80 px-4 py-3 backdrop-blur">
             <div class="flex items-center gap-2 text-xs uppercase tracking-widest text-muted-foreground">
@@ -571,7 +573,7 @@ onBeforeUnmount(() => {
             <div class="rounded-lg border border-border/60 bg-card/60 p-4">
               <h3 class="text-sm font-semibold text-foreground">Objective</h3>
               <p class="mt-2 text-xs leading-relaxed">
-                Hunt until the horn sounds. Land enough shots to impress Gruntag and claim a victory point for your collection.
+                Hunt until the horn sounds. Land enough shots to impress Gruntag and claim a {{ hunterResource.singular.toLowerCase() }} for your collection.
               </p>
             </div>
           </div>

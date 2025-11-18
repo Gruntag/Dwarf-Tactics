@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ArrowLeft, Flame, HeartPulse, Shield, Sparkles, Sword, Swords, Timer, Trophy, Zap } from "lucide-vue-next";
-import { addVictoryPoint, getVictoryPoints } from "@/lib/victory-points";
+import { addResource, getResourceCount, RESOURCES } from "@/lib/resources";
 import { toast } from "@/composables/useToast";
 
 type Phase = "ready" | "playing" | "victory" | "defeat";
@@ -49,7 +49,9 @@ const TOTAL_ENEMIES = 8;
 const router = useRouter();
 
 const phase = ref<Phase>("ready");
-const victoryPoints = ref(getVictoryPoints());
+const CHALLENGE_RESOURCE_KEY = "warriorsChallenge" as const;
+const valorResource = RESOURCES[CHALLENGE_RESOURCE_KEY];
+const valorSeals = ref(getResourceCount(CHALLENGE_RESOURCE_KEY));
 
 const drawPile = ref<Card[]>([]);
 const discardPile = ref<Card[]>([]);
@@ -505,14 +507,14 @@ watch(
   () => phase.value,
   (next) => {
     if (next === "playing") {
-      victoryPoints.value = getVictoryPoints();
+      valorSeals.value = getResourceCount(CHALLENGE_RESOURCE_KEY);
     }
     if (next === "victory" && !pointGranted.value) {
-      victoryPoints.value = addVictoryPoint();
+      valorSeals.value = addResource(CHALLENGE_RESOURCE_KEY);
       pointGranted.value = true;
       toast({
         title: "Challenge Conquered",
-        description: "You clear the arena and earn a victory point.",
+        description: `You clear the arena and earn a ${valorResource.singular.toLowerCase()}.`,
         variant: "success",
       });
     }
@@ -594,9 +596,12 @@ const cardAccentClass = (card: Card) => {
             Return
           </button>
 
-          <div class="flex items-center gap-2 rounded-lg border border-primary/30 bg-card/80 px-4 py-2 text-sm font-semibold text-foreground backdrop-blur">
+          <div class="flex items-center gap-2 rounded-lg border border-primary/30 bg-card/80 px-4 py-2 text-sm text-foreground backdrop-blur">
             <Trophy class="h-5 w-5 text-accent" />
-            <span>{{ victoryPoints }}</span>
+            <div class="flex flex-col leading-tight text-right">
+              <span class="text-[10px] uppercase tracking-widest text-muted-foreground">{{ valorResource.plural }}</span>
+              <span class="text-lg font-semibold text-foreground">{{ valorSeals }}</span>
+            </div>
           </div>
         </div>
 

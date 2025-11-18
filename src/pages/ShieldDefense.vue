@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
-import { addVictoryPoint, getVictoryPoints } from "@/lib/victory-points";
+import { addResource, getResourceCount, RESOURCES } from "@/lib/resources";
 import { toast } from "@/composables/useToast";
 import { ArrowLeft, Flame, ShieldCheck, Sparkles, Timer, Trophy } from "lucide-vue-next";
 
@@ -20,7 +20,9 @@ const router = useRouter();
 
 const phase = ref<Phase>("ready");
 const currentWave = ref(1);
-const victoryPoints = ref(getVictoryPoints());
+const SHIELD_RESOURCE_KEY = "shieldDefense" as const;
+const shieldResource = RESOURCES[SHIELD_RESOURCE_KEY];
+const bulwarkSigils = ref(getResourceCount(SHIELD_RESOURCE_KEY));
 const timeRemaining = ref(90);
 const stamina = ref(100);
 const maxStamina = ref(100);
@@ -95,7 +97,7 @@ let huntTimerHandle: number | null = null;
 
 const resetState = () => {
   currentWave.value = 1;
-  victoryPoints.value = getVictoryPoints();
+  bulwarkSigils.value = getResourceCount(SHIELD_RESOURCE_KEY);
   timeRemaining.value = 90;
   stamina.value = 100;
   shieldIntegrity.value = 100;
@@ -283,11 +285,11 @@ const completeDefense = (success: boolean) => {
     animationHandle = null;
   }
   if (success) {
-    const newTotal = addVictoryPoint();
-    victoryPoints.value = newTotal;
+    const newTotal = addResource(SHIELD_RESOURCE_KEY);
+    bulwarkSigils.value = newTotal;
     toast({
       title: "Shield Unbroken",
-      description: `You endured every strike. Victory point awarded. Total VP: ${newTotal}`,
+      description: `You endured every strike. ${shieldResource.singular} awarded. Total ${shieldResource.plural}: ${newTotal}`,
       variant: "success",
     });
   } else {
@@ -360,9 +362,9 @@ onBeforeUnmount(() => {
           <div class="rounded-lg border border-border/60 bg-card/80 px-4 py-3 backdrop-blur">
             <div class="flex items-center gap-2 text-xs uppercase tracking-widest text-muted-foreground">
               <Trophy class="h-4 w-4 text-accent" />
-              Victory Points
+              {{ shieldResource.plural }}
             </div>
-            <p class="mt-1 text-2xl font-semibold text-foreground">{{ victoryPoints }}</p>
+            <p class="mt-1 text-2xl font-semibold text-foreground">{{ bulwarkSigils }}</p>
           </div>
           <div class="rounded-lg border border-border/60 bg-card/80 px-4 py-3 backdrop-blur">
             <div class="flex items-center gap-2 text-xs uppercase tracking-widest text-muted-foreground">
@@ -562,7 +564,7 @@ onBeforeUnmount(() => {
             <div class="rounded-lg border border-border/60 bg-card/60 p-4">
               <h3 class="text-sm font-semibold text-foreground">Objective</h3>
               <p class="mt-2 text-xs leading-relaxed">
-                Survive the entire assault without your shield breaking. Succeed and Gruntag will award a victory point for your steadfast defense.
+                Survive the entire assault without your shield breaking. Succeed and Gruntag will award a {{ shieldResource.singular.toLowerCase() }} for your steadfast defense.
               </p>
             </div>
           </div>

@@ -14,7 +14,7 @@ import {
   Train,
 } from "lucide-vue-next";
 import gruntagDwarf from "@/assets/gruntag-dwarf.jpg";
-import { getVictoryPoints } from "@/lib/victory-points";
+import { getResourceSnapshots, type ResourceSnapshot } from "@/lib/resources";
 
 interface Minigame {
   name: string;
@@ -23,10 +23,14 @@ interface Minigame {
 }
 
 const router = useRouter();
-const victoryPoints = ref(0);
+const resourceVault = ref<ResourceSnapshot[]>([]);
+
+const loadResourceVault = () => {
+  resourceVault.value = getResourceSnapshots();
+};
 
 onMounted(() => {
-  victoryPoints.value = getVictoryPoints();
+  loadResourceVault();
 });
 
 const minigames: Minigame[] = [
@@ -59,11 +63,6 @@ const handleNavigate = (path?: string) => {
     />
 
     <main class="relative z-10 w-full max-w-6xl">
-      <div class="absolute right-0 top-0 flex items-center gap-2 rounded-lg border border-border/50 bg-card/80 px-4 py-2 backdrop-blur">
-        <Trophy class="h-5 w-5 text-accent" />
-        <span class="text-lg font-bold text-foreground">{{ victoryPoints }}</span>
-      </div>
-
       <div class="mb-12 space-y-6 text-center">
         <h1
           class="bg-gradient-to-r from-foreground via-primary to-accent bg-clip-text text-6xl font-black tracking-tight text-transparent drop-shadow-2xl md:text-8xl"
@@ -74,6 +73,36 @@ const handleNavigate = (path?: string) => {
           THE LEGENDARY DWARF
         </p>
       </div>
+
+      <section class="mb-12 rounded-2xl border border-border/50 bg-card/80 p-6 shadow-[var(--shadow-game)] backdrop-blur">
+        <div class="flex flex-wrap items-center justify-between gap-4">
+          <div class="flex items-center gap-3">
+            <Trophy class="h-6 w-6 text-accent" />
+            <div>
+              <p class="text-sm font-semibold uppercase tracking-[0.35em] text-muted-foreground">Resource Vault</p>
+              <p class="text-sm text-foreground/80">Spoils earned from each challenge</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            class="inline-flex items-center gap-2 rounded-md border border-primary/30 px-3 py-1 text-xs font-semibold uppercase tracking-widest text-primary transition hover:bg-primary/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-primary"
+            @click="loadResourceVault"
+          >
+            Refresh
+          </button>
+        </div>
+        <div v-if="resourceVault.length" class="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+          <div
+            v-for="snapshot in resourceVault"
+            :key="snapshot.key"
+            class="rounded-lg border border-border/40 bg-background/60 px-3 py-2 text-right"
+          >
+            <p class="text-[10px] uppercase tracking-widest text-muted-foreground">{{ snapshot.definition.plural }}</p>
+            <p class="text-xl font-bold text-foreground">{{ snapshot.amount }}</p>
+          </div>
+        </div>
+        <p v-else class="mt-4 text-sm text-muted-foreground">No spoils minted yet. Claim a resource to see it here.</p>
+      </section>
 
       <div class="space-y-8">
         <h2 class="mb-12 text-center text-3xl font-bold tracking-wide text-foreground md:text-4xl">

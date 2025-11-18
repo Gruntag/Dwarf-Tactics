@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import { ArrowLeft, Coins, Flame, Shield, Trophy, Zap } from "lucide-vue-next";
 import { toast } from "@/composables/useToast";
-import { addVictoryPoint, getVictoryPoints } from "@/lib/victory-points";
+import { addResource, getResourceCount, RESOURCES } from "@/lib/resources";
 
 type Direction = "up" | "down" | "left" | "right";
 type Tile = "wall" | "gold" | "power" | "empty";
@@ -31,7 +31,9 @@ interface Position {
 
 const router = useRouter();
 
-const victoryPoints = ref(getVictoryPoints());
+const GOLD_RESOURCE_KEY = "goldRush" as const;
+const goldResource = RESOURCES[GOLD_RESOURCE_KEY];
+const goldenIngots = ref(getResourceCount(GOLD_RESOURCE_KEY));
 const level = ref(1);
 const score = ref(0);
 const lives = ref(3);
@@ -583,11 +585,11 @@ const handleLevelComplete = () => {
   powerModeRemaining.value = 0;
   score.value += 500;
   statusMessage.value = `Depth ${level.value} cleared. Claim your reward.`;
-  const newTotal = addVictoryPoint();
-  victoryPoints.value = newTotal;
+  const newTotal = addResource(GOLD_RESOURCE_KEY);
+  goldenIngots.value = newTotal;
   toast({
     title: "Gold Secured!",
-    description: `You cleared the tunnels and earned a victory point. Total VP: ${newTotal}`,
+    description: `You cleared the tunnels and banked a ${goldResource.singular.toLowerCase()}. Total ${goldResource.plural}: ${newTotal}`,
     variant: "success",
   });
 };
@@ -777,9 +779,9 @@ onBeforeUnmount(() => {
           <div class="rounded-lg border border-border/60 bg-card/80 px-4 py-3 backdrop-blur">
             <div class="flex items-center gap-2 text-xs uppercase tracking-widest text-muted-foreground">
               <Trophy class="h-4 w-4 text-accent" />
-              Victory Points
+              {{ goldResource.plural }}
             </div>
-            <p class="mt-1 text-2xl font-semibold text-foreground">{{ victoryPoints.toLocaleString() }}</p>
+            <p class="mt-1 text-2xl font-semibold text-foreground">{{ goldenIngots.toLocaleString() }}</p>
           </div>
           <div class="rounded-lg border border-border/60 bg-card/80 px-4 py-3 backdrop-blur">
             <div class="flex items-center gap-2 text-xs uppercase tracking-widest text-muted-foreground">
@@ -924,7 +926,7 @@ onBeforeUnmount(() => {
               <ul class="mt-2 space-y-1 text-xs leading-relaxed">
                 <li>Wardens prefer straight tunnels—break line of sight by cutting corners.</li>
                 <li>Save power shards for cramped sectors to flip the chase.</li>
-                <li>Every cleared depth awards a victory point. Keep the streak alive.</li>
+                <li>Every cleared depth awards a {{ goldResource.singular.toLowerCase() }}. Keep the streak alive.</li>
               </ul>
             </div>
 

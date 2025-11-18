@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { toast } from "@/composables/useToast";
-import { addVictoryPoint, getVictoryPoints } from "@/lib/victory-points";
+import { addResource, getResourceCount, RESOURCES } from "@/lib/resources";
 import {
   ArrowLeft,
   Hammer,
@@ -111,7 +111,9 @@ const upgrades: UpgradeDefinition[] = [
 
 const router = useRouter();
 
-const victoryPoints = ref(getVictoryPoints());
+const FORGE_RESOURCE_KEY = "forgeMaster" as const;
+const forgeResource = RESOURCES[FORGE_RESOURCE_KEY];
+const forgeSeals = ref(getResourceCount(FORGE_RESOURCE_KEY));
 const gold = ref(0);
 const guildStage = ref(0);
 
@@ -500,11 +502,11 @@ const failContract = (message: string) => {
 };
 
 const finishCampaign = () => {
-  const newTotal = addVictoryPoint();
-  victoryPoints.value = newTotal;
+  const newTotal = addResource(FORGE_RESOURCE_KEY);
+  forgeSeals.value = newTotal;
   toast({
     title: "Forge Ascended!",
-    description: `The guild crowns you Forge Master. Victory Points: ${newTotal}`,
+    description: `The guild crowns you Forge Master. ${forgeResource.plural}: ${newTotal}`,
     variant: "success",
   });
 
@@ -644,7 +646,10 @@ const strikeButtonClasses =
         <div class="flex flex-wrap items-center justify-end gap-4 text-right">
           <div class="flex items-center gap-2 rounded-lg border border-border/60 bg-card/80 px-4 py-2 text-foreground backdrop-blur">
             <Trophy class="h-5 w-5 text-accent" />
-            <span class="text-lg font-semibold">{{ victoryPoints }}</span>
+            <div class="flex flex-col leading-tight text-right">
+              <span class="text-[10px] uppercase tracking-widest text-muted-foreground">{{ forgeResource.plural }}</span>
+              <span class="text-lg font-semibold">{{ forgeSeals }}</span>
+            </div>
           </div>
         </div>
       </header>
@@ -743,7 +748,7 @@ const strikeButtonClasses =
             v-else
             class="w-full max-w-sm rounded-lg border border-border/60 bg-card/70 p-4 text-sm text-muted-foreground backdrop-blur"
           >
-            Choose a contract to begin forging. Harder guild contracts unlock victory points.
+            Choose a contract to begin forging. Harder guild contracts unlock {{ forgeResource.plural.toLowerCase() }}.
             <div class="mt-4 flex items-center justify-end gap-3">
               <div class="flex items-center gap-2 rounded-lg border border-border/60 bg-card/80 px-4 py-2 text-foreground backdrop-blur">
                 <Hammer class="h-5 w-5 text-primary" />

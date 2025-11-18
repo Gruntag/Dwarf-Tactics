@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ArrowLeft, Crown, Flame, HeartPulse, LayoutGrid, Sparkles, Timer, Train, Trophy } from "lucide-vue-next";
-import { addVictoryPoint, getVictoryPoints } from "@/lib/victory-points";
+import { addResource, getResourceCount, RESOURCES } from "@/lib/resources";
 import { toast } from "@/composables/useToast";
 
 type Phase = "ready" | "running" | "victory" | "defeat";
@@ -31,7 +31,9 @@ const LOOT_TARGET = 22;
 const router = useRouter();
 
 const phase = ref<Phase>("ready");
-const victoryPoints = ref(getVictoryPoints());
+const LOOT_RESOURCE_KEY = "lootTrain" as const;
+const lootResource = RESOURCES[LOOT_RESOURCE_KEY];
+const cargoCrates = ref(getResourceCount(LOOT_RESOURCE_KEY));
 
 const snake = ref<Position[]>([]);
 const direction = ref<Position>({ x: 1, y: 0 });
@@ -289,10 +291,10 @@ watch(
   () => phase.value,
   (next) => {
     if (next === "running") {
-      victoryPoints.value = getVictoryPoints();
+      cargoCrates.value = getResourceCount(LOOT_RESOURCE_KEY);
     }
     if (next === "victory" && !pointGranted) {
-      victoryPoints.value = addVictoryPoint();
+      cargoCrates.value = addResource(LOOT_RESOURCE_KEY);
       pointGranted = true;
     }
   }
@@ -361,9 +363,12 @@ const overlayAction = computed(() => {
             Return
           </button>
 
-          <div class="flex items-center gap-2 rounded-lg border border-primary/30 bg-card/80 px-4 py-2 text-sm font-semibold text-foreground backdrop-blur">
+          <div class="flex items-center gap-2 rounded-lg border border-primary/30 bg-card/80 px-4 py-2 text-sm text-foreground backdrop-blur">
             <Trophy class="h-5 w-5 text-accent" />
-            <span>{{ victoryPoints }}</span>
+            <div class="flex flex-col leading-tight text-right">
+              <span class="text-[10px] uppercase tracking-widest text-muted-foreground">{{ lootResource.plural }}</span>
+              <span class="text-lg font-semibold text-foreground">{{ cargoCrates }}</span>
+            </div>
           </div>
         </div>
 
@@ -506,7 +511,7 @@ const overlayAction = computed(() => {
                   <ul class="mt-3 space-y-2 text-sm text-muted-foreground">
                     <li>Keep a wide loop so the train has room for sudden turns.</li>
                     <li>Use the outer edges for travel and the center for pickups.</li>
-                    <li>Link 22 carts to complete the haul and earn a victory point.</li>
+                    <li>Link 22 carts to complete the haul and earn a {{ lootResource.singular.toLowerCase() }}.</li>
                   </ul>
                 </div>
               </aside>
@@ -562,7 +567,7 @@ const overlayAction = computed(() => {
         <div class="rounded-3xl border border-primary/15 bg-slate-900/60 p-6 shadow-[0_18px_50px_rgba(15,23,42,0.45)] backdrop-blur">
           <h3 class="text-lg font-semibold text-foreground">Victory Terms</h3>
           <p class="mt-3 text-sm text-muted-foreground">
-            The train must haul <strong>22 carts</strong> without derailing. Each pickup accelerates the convoy, testing your reflexes. Keep Gruntag safe and the loot secure to earn a victory point.
+            The train must haul <strong>22 carts</strong> without derailing. Each pickup accelerates the convoy, testing your reflexes. Keep Gruntag safe and the loot secure to earn a {{ lootResource.singular.toLowerCase() }}.
           </p>
         </div>
       </aside>
