@@ -2,6 +2,7 @@
 import { onMounted, ref, type Component } from "vue";
 import { useRouter } from "vue-router";
 import {
+  Crown,
   Gamepad2,
   Sword,
   Shield,
@@ -32,6 +33,12 @@ const loadResourceVault = () => {
 onMounted(() => {
   loadResourceVault();
 });
+
+const mountainKingGame: Minigame = {
+  name: "Mountain King",
+  icon: Crown,
+  path: "/mountain-king",
+};
 
 const minigames: Minigame[] = [
   { name: "Battle Arena", icon: Sword, path: "/battle-arena" },
@@ -123,7 +130,16 @@ const handleNavigate = (path?: string) => {
             </button>
           </div>
 
-          <div class="group relative flex-shrink-0">
+          <div class="group relative flex-shrink-0 pt-16">
+            <button
+              type="button"
+              class="absolute left-1/2 top-0 z-10 flex -translate-x-1/2 -translate-y-1/2 items-center gap-3 rounded-full border border-primary/60 bg-card/90 px-6 py-3 text-sm font-semibold uppercase tracking-widest text-foreground shadow-[var(--shadow-game)] transition hover:bg-primary/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-primary md:text-base"
+              @click="handleNavigate(mountainKingGame.path)"
+              aria-label="Enter the Mountain King challenge"
+            >
+              <component :is="mountainKingGame.icon" class="h-5 w-5 text-accent transition-transform duration-300 group-hover:scale-110" />
+              {{ mountainKingGame.name }}
+            </button>
             <div
               class="absolute inset-x-6 -top-6 bottom-6 rounded-lg bg-gradient-to-r from-primary via-accent to-primary opacity-75 blur-xl transition-opacity duration-500 group-hover:opacity-100"
             />

@@ -9,6 +9,11 @@ const router = createRouter({
       component: () => import("@/pages/Index.vue"),
     },
     {
+      path: "/mountain-king",
+      name: "mountain-king",
+      component: () => import("@/pages/MountainKing.vue"),
+    },
+    {
       path: "/gem-miner",
       name: "gem-miner",
       component: () => import("@/pages/GemMiner.vue"),
