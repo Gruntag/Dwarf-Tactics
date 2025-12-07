@@ -1,1117 +1,1422 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
-import {
-  Map as MapIcon,
-  Mountain,
-  Route,
-  Hammer,
-  Pickaxe,
-  Package,
-  ZoomIn,
-  ZoomOut,
-  Shield,
-  Trees,
-  Compass,
-  RefreshCcw,
-} from "lucide-vue-next";
-import {
-  getResourceSnapshots,
-  getResourceCount,
-  setResourceCount,
-  type ResourceSnapshot,
-  type ResourceKey,
-} from "@/lib/resources";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { useRouter } from "vue-router";
+import { ArrowLeft, Clock3, Compass, Flag, Hammer, Loader2, Route } from "lucide-vue-next";
 
-type EconomyResource =
-  | "ore"
-  | "timber"
+const GRID_COLUMNS = 14;
+const GRID_ROWS = 12;
+const TOTAL_TILES = GRID_COLUMNS * GRID_ROWS;
+const PROCESS_TIME_MS = 30000;
+const SIM_TICK_MS = 500;
+const WORKER_SPEED_MS = 2000; // 2 seconds per hex
+const FOREST_PATCHES = 35;
+const HILL_COUNT = 12;
+const TOWN_HALL_SINK_AMOUNT = 9999;
+const HEX_WIDTH = 112;
+const HEX_SIZE = HEX_WIDTH / 2;
+const HEX_HEIGHT = Math.sqrt(3) * HEX_SIZE; // perfect flat-top
+
+type ResourceType =
+  | "logs"
+  | "boards"
+  | "stone"
+  | "skins"
+  | "ironOre"
   | "coal"
-  | "ingots"
-  | "tools"
-  | "provisions"
-  | "ale"
-  | "armaments"
-  | "prestige";
+  | "ironBars"
+  | "pigs"
+  | "grain"
+  | "flour"
+  | "bread"
+  | "axes"
+  | "shields"
+  | "armor"
+  | "beer"
+  | "meat";
 
-type Terrain = "granite" | "frost" | "evergreen" | "ember" | "glimmer";
-
-type BuildingCategory = "extraction" | "refinement" | "support" | "military";
-
-interface EconomyState {
-  resources: Record<EconomyResource, number>;
-  buildings: BuildingInstance[];
-  haulingLog: HaulingEvent[];
+interface ResourceDescriptor {
+  label: string;
+  role: "raw" | "refined" | "tool" | "food" | "military";
+  starting?: number;
+  note?: string;
 }
 
-interface BuildingBlueprint {
-  id: string;
-  name: string;
-  description: string;
-  inputs?: Partial<Record<EconomyResource, number>>;
-  output: { key: EconomyResource; amount: number };
-  category: BuildingCategory;
-  cost: Partial<Record<ResourceKey, number>>;
-}
+const RESOURCE_LIBRARY: Record<ResourceType, ResourceDescriptor> = {
+  logs: { label: "Logs", role: "raw" },
+  boards: { label: "Boards", role: "refined", starting: 20 },
+  stone: { label: "Stone", role: "raw", starting: 20 },
+  skins: { label: "Skins", role: "raw", starting: 5 },
+  ironOre: { label: "Iron Ore", role: "raw" },
+  coal: { label: "Coal", role: "raw" },
+  ironBars: { label: "Iron Bars", role: "refined" },
+  pigs: { label: "Pigs", role: "raw" },
+  grain: { label: "Grain", role: "raw" },
+  flour: { label: "Flour", role: "refined" },
+  bread: { label: "Bread", role: "food", note: "Food" },
+  axes: { label: "Axes", role: "military", note: "Needed for warriors" },
+  shields: { label: "Shields", role: "military", note: "Needed for warriors" },
+  armor: { label: "Armor", role: "military", note: "Needed for warriors" },
+  beer: { label: "Beer", role: "food", note: "Needed for warriors" },
+  meat: { label: "Meat", role: "food" },
+};
 
-interface BuildingInstance {
-  blueprintId: string;
-  level: number;
-  efficiency: number;
-}
+const RESOURCE_ORDER: ResourceType[] = [
+  "logs",
+  "boards",
+  "stone",
+  "skins",
+  "ironOre",
+  "coal",
+  "ironBars",
+  "grain",
+  "flour",
+  "bread",
+  "pigs",
+  "meat",
+  "beer",
+  "axes",
+  "shields",
+  "armor",
+];
 
-interface HaulingEvent {
-  id: string;
-  detail: string;
-  timestamp: string;
-}
+type HillYield = "stone" | "ironOre" | "coal";
 
 interface HexTile {
   id: string;
+  col: number;
+  row: number;
   q: number;
   r: number;
-  terrain: Terrain;
+  trees: number;
+  hillResource: HillYield | null;
+  isCapital: boolean;
+  buildingId: string | null;
+  forestStatus: "cutting" | "planting" | null;
+}
+
+type BuildableType =
+  | "woodcutter"
+  | "forester"
+  | "sawmill"
+  | "mine"
+  | "ironSmelter"
+  | "smithy"
+  | "armorer"
+  | "farm"
+  | "pigFarm"
+  | "butcher"
+  | "windmill"
+  | "bakery"
+  | "brewery";
+
+type BuildingType = BuildableType | "townHall";
+
+type ResourceMap = Partial<Record<ResourceType, number>>;
+
+interface BuildingDefinition {
+  type: BuildingType;
   name: string;
-  claimed: boolean;
-  hasCapital: boolean;
-  roads: string[];
-  economy: EconomyState;
+  description: string;
+  category: string;
+  cost: ResourceMap;
+  buildable: boolean;
+  process?: {
+    inputs?: ResourceMap;
+    outputs?: ResourceMap;
+    durationMs?: number;
+    special?: "woodcutter" | "forester" | "mine";
+  };
+  requirement?: (tile: HexTile) => boolean;
+  inputBuffer?: ResourceMap;
 }
 
-interface ClaimCost {
-  key: ResourceKey;
+interface ProcessIntent {
+  label: string;
+  durationMs?: number;
+  inputs?: ResourceMap;
+  outputs?: ResourceMap;
+  onStart?: (building: BuildingInstance, tile: HexTile) => void;
+  onComplete?: (building: BuildingInstance, tile: HexTile, intent: ProcessIntent) => void;
+}
+
+interface ProcessingState {
+  label: string;
+  remainingMs: number;
+  durationMs: number;
+  intent: ProcessIntent;
+}
+
+interface BuildingInstance {
+  id: string;
+  type: BuildingType;
+  tileId: string;
+  flagInventory: ResourceMap;
+  construction: {
+    delivered: ResourceMap;
+    complete: boolean;
+  };
+  processing: ProcessingState | null;
+  lastMessage: string;
+}
+
+interface Need {
+  resource: ResourceType;
   amount: number;
+  priority: number;
 }
 
-type StatusTone = "info" | "success" | "warn";
+interface Road {
+  id: string;
+  fromBuildingId: string;
+  toBuildingId: string;
+  distance: number;
+  worker: RoadWorker;
+}
 
-const mapRadius = 6;
-const HEX_WIDTH = 120;
-const HEX_HEIGHT = 104;
-const axialDirections: Array<[number, number]> = [
-  [1, 0],
-  [0, 1],
-  [-1, 1],
-  [-1, 0],
-  [0, -1],
-  [1, -1],
-];
+interface RoadWorker {
+  status: "idle" | "hauling";
+  direction: "forward" | "backward";
+  job: TransferJob | null;
+  progressMs: number;
+  durationMs: number;
+}
 
-const economyResourcesOrder: EconomyResource[] = [
-  "ore",
-  "timber",
-  "coal",
-  "ingots",
-  "tools",
-  "provisions",
-  "ale",
-  "armaments",
-  "prestige",
-];
+interface TransferJob {
+  id: string;
+  from: string;
+  to: string;
+  resource: ResourceType;
+  priority: number;
+}
 
-const resourceLabels: Record<EconomyResource, string> = {
-  ore: "Ore",
-  timber: "Timber",
-  coal: "Coal",
-  ingots: "Ingots",
-  tools: "Tools",
-  provisions: "Provisions",
-  ale: "Ale",
-  armaments: "Armaments",
-  prestige: "Prestige",
+const BUILDING_LIBRARY: Record<BuildingType, BuildingDefinition> = {
+  townHall: {
+    type: "townHall",
+    name: "Mountain Keep",
+    description: "Stores every resource needed by the realm.",
+    category: "Capital",
+    cost: {},
+    buildable: false,
+  },
+  woodcutter: {
+    type: "woodcutter",
+    name: "Woodcutter",
+    description: "Cuts nearby trees into logs.",
+    category: "Forestry",
+    cost: { boards: 2 },
+    buildable: true,
+    process: { special: "woodcutter" },
+  },
+  forester: {
+    type: "forester",
+    name: "Forester",
+    description: "Plants new groves to keep the saws fed.",
+    category: "Forestry",
+    cost: { boards: 2 },
+    buildable: true,
+    process: { special: "forester" },
+  },
+  sawmill: {
+    type: "sawmill",
+    name: "Sawmill",
+    description: "Turns logs into sturdy boards.",
+    category: "Forestry",
+    cost: { boards: 5, stone: 2 },
+    buildable: true,
+    process: { inputs: { logs: 2 }, outputs: { boards: 2 } },
+    inputBuffer: { logs: 4 },
+  },
+  mine: {
+    type: "mine",
+    name: "Mine",
+    description: "Consumes food to pull stone, coal, or ore depending on the hill.",
+    category: "Extraction",
+    cost: { boards: 10 },
+    buildable: true,
+    process: { special: "mine" },
+    requirement: (tile) => Boolean(tile.hillResource),
+    inputBuffer: { bread: 2, meat: 2 },
+  },
+  ironSmelter: {
+    type: "ironSmelter",
+    name: "Iron Smelter",
+    description: "Burns coal with ore to pour iron bars.",
+    category: "Industry",
+    cost: { boards: 5, stone: 2 },
+    buildable: true,
+    process: { inputs: { ironOre: 1, coal: 1 }, outputs: { ironBars: 1 } },
+    inputBuffer: { ironOre: 2, coal: 2 },
+  },
+  smithy: {
+    type: "smithy",
+    name: "Smithy",
+    description: "Forms axes and shields for the warriors.",
+    category: "Industry",
+    cost: { boards: 3, stone: 5, ironBars: 1 },
+    buildable: true,
+    process: { inputs: { boards: 1, ironBars: 1 }, outputs: { axes: 1, shields: 1 } },
+    inputBuffer: { boards: 2, ironBars: 2 },
+  },
+  armorer: {
+    type: "armorer",
+    name: "Armorer",
+    description: "Shapes armor from skins and iron bars.",
+    category: "Industry",
+    cost: { boards: 3, stone: 5, ironBars: 1 },
+    buildable: true,
+    process: { inputs: { ironBars: 1, skins: 1 }, outputs: { armor: 1 } },
+    inputBuffer: { ironBars: 2, skins: 2 },
+  },
+  farm: {
+    type: "farm",
+    name: "Farm",
+    description: "Sows grain around the tile and harvests it.",
+    category: "Harvest",
+    cost: { boards: 8, stone: 4 },
+    buildable: true,
+    process: { outputs: { grain: 2 } },
+  },
+  pigFarm: {
+    type: "pigFarm",
+    name: "Pig Farm",
+    description: "Feeds grain to pigs.",
+    category: "Harvest",
+    cost: { boards: 7, stone: 3 },
+    buildable: true,
+    process: { inputs: { grain: 1 }, outputs: { pigs: 1 } },
+    inputBuffer: { grain: 3 },
+  },
+  butcher: {
+    type: "butcher",
+    name: "Butcher",
+    description: "Turns pigs into meat and skins.",
+    category: "Harvest",
+    cost: { boards: 5, stone: 2 },
+    buildable: true,
+    process: { inputs: { pigs: 1 }, outputs: { meat: 1, skins: 1 } },
+    inputBuffer: { pigs: 2 },
+  },
+  windmill: {
+    type: "windmill",
+    name: "Windmill",
+    description: "Grinds grain into flour.",
+    category: "Processing",
+    cost: { boards: 8, stone: 3, skins: 4 },
+    buildable: true,
+    process: { inputs: { grain: 1 }, outputs: { flour: 1 } },
+    inputBuffer: { grain: 3 },
+  },
+  bakery: {
+    type: "bakery",
+    name: "Bakery",
+    description: "Bakes flour into bread.",
+    category: "Processing",
+    cost: { boards: 3, stone: 7 },
+    buildable: true,
+    process: { inputs: { flour: 1 }, outputs: { bread: 1 } },
+    inputBuffer: { flour: 3 },
+  },
+  brewery: {
+    type: "brewery",
+    name: "Brewery",
+    description: "Brews grain into beer.",
+    category: "Processing",
+    cost: { boards: 3, stone: 7, ironBars: 2 },
+    buildable: true,
+    process: { inputs: { grain: 1 }, outputs: { beer: 1 } },
+    inputBuffer: { grain: 3 },
+  },
 };
 
-const terrainPalette: Terrain[] = ["granite", "frost", "evergreen", "ember", "glimmer"];
-
-const terrainLabels: Record<Terrain, string> = {
-  granite: "Granite Ridge",
-  frost: "Frost Wastes",
-  evergreen: "Evergreen Reach",
-  ember: "Ember Fault",
-  glimmer: "Glimmer Veil",
+const router = useRouter();
+const goHome = () => {
+  router.push("/");
 };
 
-const terrainGradients: Record<Terrain, string> = {
-  granite: "from-slate-700/90 via-slate-800/90 to-slate-900/90",
-  frost: "from-cyan-600/80 via-sky-500/70 to-blue-600/70",
-  evergreen: "from-green-700/80 via-emerald-600/70 to-lime-600/60",
-  ember: "from-orange-700/80 via-amber-600/70 to-red-600/70",
-  glimmer: "from-purple-700/80 via-fuchsia-600/70 to-indigo-600/70",
-};
+const { tiles: generatedTiles, capitalTileId } = createWorld();
+const tilePositions = new Map<string, { x: number; y: number }>();
+const mapExtents = computeMapExtents(generatedTiles);
+const tiles = ref<HexTile[]>(generatedTiles);
+const buildings = ref<BuildingInstance[]>([]);
+const roads = ref<Road[]>([]);
+const selectedTileId = ref<string | null>(capitalTileId);
+const roadAnchor = ref<BuildingInstance | null>(null);
+const statusMessage = ref("Connect flags with roads to let workers haul resources (1s per hex).");
 
-const buildingBlueprints: BuildingBlueprint[] = [
-  {
-    id: "ore-mine",
-    name: "Deep Ore Mine",
-    description: "Cuts galleries into the ridge to haul raw ore. Consumes rations each cycle.",
-    inputs: { provisions: 1 },
-    output: { key: "ore", amount: 4 },
-    category: "extraction",
-    cost: { forgeMaster: 2 },
-  },
-  {
-    id: "lumber-camp",
-    name: "Evergreen Lumber Camp",
-    description: "Harvests timber from nearby groves.",
-    inputs: { provisions: 1 },
-    output: { key: "timber", amount: 3 },
-    category: "extraction",
-    cost: { trophyHunt: 2 },
-  },
-  {
-    id: "charcoal-kiln",
-    name: "Charcoal Kiln",
-    description: "Burns timber into coal for the smelters.",
-    inputs: { timber: 2 },
-    output: { key: "coal", amount: 2 },
-    category: "refinement",
-    cost: { goldRush: 25 },
-  },
-  {
-    id: "smelter",
-    name: "Smelter Stack",
-    description: "Refines ore and coal into ingots.",
-    inputs: { ore: 3, coal: 1 },
-    output: { key: "ingots", amount: 2 },
-    category: "refinement",
-    cost: { forgeMaster: 4 },
-  },
-  {
-    id: "gearworks",
-    name: "Gearworks",
-    description: "Turns ingots and timber into tools.",
-    inputs: { ingots: 2, timber: 1 },
-    output: { key: "tools", amount: 2 },
-    category: "support",
-    cost: { shieldDefense: 2 },
-  },
-  {
-    id: "granary",
-    name: "Granary & Smokehouse",
-    description: "Prepares provisions for work crews.",
-    inputs: { timber: 1 },
-    output: { key: "provisions", amount: 3 },
-    category: "support",
-    cost: { lootTrain: 1 },
-  },
-  {
-    id: "brewery",
-    name: "Magma Brewery",
-    description: "Brews morale-boosting ale.",
-    inputs: { provisions: 2 },
-    output: { key: "ale", amount: 2 },
-    category: "support",
-    cost: { dragonFire: 2 },
-  },
-  {
-    id: "armory",
-    name: "Hammerfall Armory",
-    description: "Produces armaments for the frontier.",
-    inputs: { ingots: 1, tools: 1, ale: 1 },
-    output: { key: "armaments", amount: 2 },
-    category: "military",
-    cost: { battleArena: 3, warriorsChallenge: 1 },
-  },
-  {
-    id: "hall-of-legends",
-    name: "Hall of Legends",
-    description: "Celebrates victories and mints prestige.",
-    inputs: { armaments: 1, ale: 1 },
-    output: { key: "prestige", amount: 1 },
-    category: "military",
-    cost: { trophyHunt: 5, dragonFire: 3 },
-  },
-];
-
-const blueprintIndex = Object.fromEntries(buildingBlueprints.map((bp) => [bp.id, bp]));
-
-const claimCosts: ClaimCost[] = [
-  { key: "battleArena", amount: 3 },
-  { key: "goldRush", amount: 40 },
-  { key: "warriorsChallenge", amount: 1 },
-];
-
-const roadCosts: ClaimCost[] = [{ key: "lootTrain", amount: 2 }];
-
-const makeHaulingEvent = (detail: string): HaulingEvent => ({
-  id: `haul-${Math.random().toString(36).slice(2, 8)}`,
-  detail,
-  timestamp: new Date().toLocaleTimeString(),
-});
-
-const applyTerrainBonus = (resources: Record<EconomyResource, number>, terrain: Terrain) => {
-  const bonusMap: Record<Terrain, { key: EconomyResource; amount: number }> = {
-    granite: { key: "ore", amount: 8 },
-    frost: { key: "provisions", amount: 6 },
-    evergreen: { key: "timber", amount: 8 },
-    ember: { key: "coal", amount: 5 },
-    glimmer: { key: "prestige", amount: 1 },
-  };
-  const bonus = bonusMap[terrain];
-  resources[bonus.key] += bonus.amount;
-};
-
-const createEconomyState = (mode: "capital" | "wilds", terrain: Terrain): EconomyState => {
-  const base: EconomyState = {
-    resources: {
-      ore: 0,
-      timber: 0,
-      coal: 0,
-      ingots: 0,
-      tools: 0,
-      provisions: 0,
-      ale: 0,
-      armaments: 0,
-      prestige: 0,
-    },
-    buildings: [],
-    haulingLog: [],
-  };
-
-  if (mode === "capital") {
-    base.resources.ore = 40;
-    base.resources.timber = 28;
-    base.resources.coal = 8;
-    base.resources.provisions = 18;
-    base.resources.ale = 6;
-    base.buildings = [
-      { blueprintId: "ore-mine", level: 1, efficiency: 1.1 },
-      { blueprintId: "lumber-camp", level: 1, efficiency: 1.1 },
-      { blueprintId: "granary", level: 1, efficiency: 1.05 },
-      { blueprintId: "brewery", level: 1, efficiency: 1 },
-      { blueprintId: "smelter", level: 1, efficiency: 1 },
-    ];
-    base.haulingLog = [makeHaulingEvent("Capital caravans lit the first forges.")];
-  } else {
-    base.resources.provisions = 4;
-  }
-
-  applyTerrainBonus(base.resources, terrain);
-  return base;
-};
-
-const generateHexName = (terrain: Terrain): string => {
-  const prefixes: Record<Terrain, string[]> = {
-    granite: ["Anvil", "Mythril", "Stone", "Ridge", "Obsidian"],
-    frost: ["Frost", "Glacier", "Winter", "Ice", "Snow"],
-    evergreen: ["Verdant", "Ever", "Grove", "Moss", "Bramble"],
-    ember: ["Ember", "Ash", "Blaze", "Coal", "Cinder"],
-    glimmer: ["Glimmer", "Radiant", "Starlit", "Auric", "Shimmer"],
-  };
-  const suffixes = ["Hollow", "Reach", "Spur", "Stronghold", "Fastness", "Hold", "Span"];
-  const prefixOptions = prefixes[terrain];
-  const prefix = prefixOptions[Math.floor(Math.random() * prefixOptions.length)];
-  const suffix = suffixes[Math.floor(Math.random() * suffixes.length)];
-  return `${prefix} ${suffix}`;
-};
-
-const createHexGrid = (): HexTile[] => {
-  const tiles: HexTile[] = [];
-  let counter = 0;
-  for (let q = -mapRadius; q <= mapRadius; q += 1) {
-    for (let r = -mapRadius; r <= mapRadius; r += 1) {
-      const s = -q - r;
-      if (Math.abs(s) > mapRadius) continue;
-      const isCapital = q === 0 && r === 0;
-      const terrain: Terrain = isCapital ? "granite" : terrainPalette[Math.floor(Math.random() * terrainPalette.length)];
-      tiles.push({
-        id: `hex-${counter}`,
-        q,
-        r,
-        terrain,
-        name: isCapital ? "Crown Seat Capital" : generateHexName(terrain),
-        claimed: isCapital,
-        hasCapital: isCapital,
-        roads: [],
-        economy: createEconomyState(isCapital ? "capital" : "wilds", terrain),
-      });
-      counter += 1;
-    }
-  }
-  return tiles;
-};
-
-const hexes = ref<HexTile[]>(createHexGrid());
-const selectedHexId = ref(hexes.value.find((tile) => tile.hasCapital)?.id ?? hexes.value[0]?.id ?? "");
-const zoomedHexId = ref(selectedHexId.value);
-const zoomLevel = ref(1.5);
-
-const resourceVault = ref<ResourceSnapshot[]>([]);
-const loadVault = () => {
-  resourceVault.value = getResourceSnapshots();
-};
-onMounted(() => {
-  loadVault();
-});
-
-const resourceLedger = computed(() => {
-  const ledger = {} as Record<ResourceKey, number>;
-  resourceVault.value.forEach((snapshot) => {
-    ledger[snapshot.key] = snapshot.amount;
-  });
-  return ledger;
-});
-
-const statusMessage = ref<{ text: string; tone: StatusTone } | null>(null);
-const setStatus = (text: string, tone: StatusTone = "info") => {
-  statusMessage.value = { text, tone };
-};
-
-const hexById = (id: string | null | undefined) => hexes.value.find((hex) => hex.id === id);
-
-const selectedHex = computed(() => hexById(selectedHexId.value) ?? hexes.value[0]);
-const zoomedHex = computed(() => hexById(zoomedHexId.value) ?? selectedHex.value);
-
-const claimedTiles = computed(() => hexes.value.filter((hex) => hex.claimed).length);
-const totalTiles = computed(() => hexes.value.length);
-const totalPrestige = computed(() =>
-  hexes.value
-    .filter((hex) => hex.claimed)
-    .reduce((sum, hex) => sum + hex.economy.resources.prestige, 0)
-);
-const totalRoadSegments = computed(() => {
-  const segments = hexes.value.reduce((sum, hex) => sum + hex.roads.length, 0);
-  return Math.floor(segments / 2);
-});
-const mapCanvasStyle = computed(() => {
-  const diameter = mapRadius * 2 + 1;
-  const width = HEX_WIDTH * (diameter + mapRadius);
-  const height = HEX_HEIGHT * (diameter + mapRadius);
+const mapStyle = computed(() => {
+  const width = mapExtents.maxX - mapExtents.minX + HEX_WIDTH * 2;
+  const height = mapExtents.maxY - mapExtents.minY + HEX_HEIGHT * 2;
   return {
     width: `${width}px`,
     height: `${height}px`,
   };
 });
 
-const tilePositionStyle = (hex: HexTile) => {
-  const x = HEX_WIDTH * (hex.q + mapRadius) + (HEX_WIDTH / 2) * (hex.r + mapRadius);
-  const y = HEX_HEIGHT * 0.85 * (hex.r + mapRadius);
+const startInventory: ResourceMap = {};
+for (const resource of RESOURCE_ORDER) {
+  const starting = RESOURCE_LIBRARY[resource].starting ?? 0;
+  if (starting > 0) {
+    startInventory[resource] = starting;
+  }
+}
+
+const townHall = createBuildingInstance("townHall", capitalTileId, startInventory);
+buildings.value.push(townHall);
+const capitalTile = tiles.value.find((tile) => tile.id === capitalTileId);
+if (capitalTile) {
+  capitalTile.buildingId = townHall.id;
+}
+
+let simHandle: number | null = null;
+
+onMounted(() => {
+  simHandle = window.setInterval(() => {
+    updateBuildings(SIM_TICK_MS);
+    updateRoads(SIM_TICK_MS);
+  }, SIM_TICK_MS);
+});
+
+onBeforeUnmount(() => {
+  if (simHandle) {
+    window.clearInterval(simHandle);
+    simHandle = null;
+  }
+});
+
+const selectedTile = computed(() => tiles.value.find((tile) => tile.id === selectedTileId.value) ?? null);
+
+const selectedBuilding = computed(() => {
+  if (!selectedTile.value || !selectedTile.value.buildingId) return null;
+  return buildings.value.find((building) => building.id === selectedTile.value?.buildingId) ?? null;
+});
+
+const selectedDefinition = computed(() => (selectedBuilding.value ? BUILDING_LIBRARY[selectedBuilding.value.type] : null));
+
+const selectedRemainingCost = computed(() => (selectedBuilding.value ? getRemainingCost(selectedBuilding.value) : {}));
+
+const selectedRoads = computed(() => {
+  if (!selectedBuilding.value) return [];
+  return roads.value.filter(
+    (road) => road.fromBuildingId === selectedBuilding.value?.id || road.toBuildingId === selectedBuilding.value?.id,
+  );
+});
+
+const buildableGroups = computed(() => {
+  const map = new Map<string, BuildingDefinition[]>();
+  Object.values(BUILDING_LIBRARY)
+    .filter((definition) => definition.buildable)
+    .forEach((definition) => {
+      if (!map.has(definition.category)) {
+        map.set(definition.category, []);
+      }
+      map.get(definition.category)!.push(definition);
+    });
+  return Array.from(map.entries()).map(([category, definitions]) => ({ category, definitions }));
+});
+
+const forestTileCount = computed(() => tiles.value.filter((tile) => tile.trees > 0).length);
+const hillTileCount = computed(() => tiles.value.filter((tile) => tile.hillResource).length);
+
+const globalInventory = computed(() => {
+  const totals: Record<ResourceType, number> = Object.fromEntries(RESOURCE_ORDER.map((resource) => [resource, 0])) as Record<
+    ResourceType,
+    number
+  >;
+  buildings.value.forEach((building) => {
+    Object.entries(building.flagInventory).forEach(([resourceKey, amount]) => {
+      if (!amount) return;
+      totals[resourceKey as ResourceType] += amount;
+    });
+    if (!building.construction.complete) {
+      Object.entries(building.construction.delivered).forEach(([resourceKey, amount]) => {
+        if (!amount) return;
+        totals[resourceKey as ResourceType] += amount;
+      });
+    }
+  });
+  return totals;
+});
+
+function createWorld(): { tiles: HexTile[]; capitalTileId: string } {
+  const tiles: HexTile[] = [];
+  for (let row = 0; row < GRID_ROWS; row += 1) {
+    for (let col = 0; col < GRID_COLUMNS; col += 1) {
+      const q = col - Math.floor(row / 2);
+      const r = row;
+      tiles.push({
+        id: `${col}-${row}`,
+        col,
+        row,
+        q,
+        r,
+        trees: 0,
+        hillResource: null,
+        isCapital: false,
+        buildingId: null,
+        forestStatus: null,
+      });
+    }
+  }
+  const capitalCol = Math.floor(GRID_COLUMNS / 2);
+  const capitalRow = Math.floor(GRID_ROWS / 2);
+  const capitalId = `${capitalCol}-${capitalRow}`;
+  const capitalTile = tiles.find((tile) => tile.id === capitalId);
+  if (capitalTile) {
+    capitalTile.isCapital = true;
+  }
+  seedForests(tiles, capitalId);
+  seedHills(tiles, capitalId);
+  return { tiles, capitalTileId: capitalId };
+}
+
+function axialToPixel(q: number, r: number): { x: number; y: number } {
+  const x = HEX_SIZE * (1.5 * q);
+  const y = HEX_SIZE * (Math.sqrt(3) * (r + q / 2));
+  return { x, y };
+}
+
+function computeMapExtents(allTiles: HexTile[]): { minX: number; maxX: number; minY: number; maxY: number } {
+  let minX = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  allTiles.forEach((tile) => {
+    const pos = axialToPixel(tile.q, tile.r);
+    tilePositions.set(tile.id, pos);
+    minX = Math.min(minX, pos.x);
+    maxX = Math.max(maxX, pos.x);
+    minY = Math.min(minY, pos.y);
+    maxY = Math.max(maxY, pos.y);
+  });
+  return { minX, maxX, minY, maxY };
+}
+
+function hexDistance(a: Pick<HexTile, "q" | "r">, b: Pick<HexTile, "q" | "r">): number {
+  return (Math.abs(a.q - b.q) + Math.abs(a.q + a.r - b.q - b.r) + Math.abs(a.r - b.r)) / 2;
+}
+
+function getTilesWithinRadius(allTiles: HexTile[], center: HexTile, radius: number): HexTile[] {
+  return allTiles.filter((tile) => hexDistance(tile, center) <= radius);
+}
+
+function seedForests(allTiles: HexTile[], capitalId: string): void {
+  for (let i = 0; i < FOREST_PATCHES; i += 1) {
+    const candidates = allTiles.filter((tile) => tile.id !== capitalId && !tile.isCapital);
+    const anchor = candidates[Math.floor(Math.random() * candidates.length)];
+    if (!anchor) continue;
+    const radius = 1 + Math.floor(Math.random() * 2);
+    const cluster = getTilesWithinRadius(allTiles, anchor, radius).filter((tile) => tile.id !== capitalId);
+    cluster.forEach((tile) => {
+      tile.trees = 1;
+    });
+  }
+}
+
+function seedHills(allTiles: HexTile[], capitalId: string): void {
+  const capitalTile = allTiles.find((tile) => tile.id === capitalId);
+  const hillTypes: HillYield[] = ["stone", "ironOre", "coal"];
+
+  if (capitalTile) {
+    const nearby = allTiles.filter((tile) => tile.id !== capitalId && hexDistance(tile, capitalTile) <= 5);
+    const guaranteed = nearby[Math.floor(Math.random() * nearby.length)];
+    if (guaranteed) {
+      guaranteed.hillResource = "stone";
+    }
+  }
+
+  let placed = allTiles.filter((tile) => tile.hillResource).length;
+  let attempts = 0;
+  while (placed < HILL_COUNT && attempts < 500) {
+    const tile = allTiles[Math.floor(Math.random() * allTiles.length)];
+    if (!tile || tile.id === capitalId || tile.hillResource) {
+      attempts += 1;
+      continue;
+    }
+    tile.hillResource = hillTypes[Math.floor(Math.random() * hillTypes.length)];
+    placed += 1;
+    attempts += 1;
+  }
+
+  if (
+    capitalTile &&
+    !allTiles.some((tile) => tile.hillResource === "stone" && hexDistance(tile, capitalTile) <= 5 && tile.id !== capitalId)
+  ) {
+    const fallback =
+      allTiles.find((tile) => tile.id !== capitalId && hexDistance(tile, capitalTile) <= 5) ?? allTiles[1];
+    if (fallback) {
+      fallback.hillResource = "stone";
+    }
+  }
+}
+
+function createBuildingInstance(
+  type: BuildingType,
+  tileId: string,
+  seedInventory?: ResourceMap,
+): BuildingInstance {
+  const definition = BUILDING_LIBRARY[type];
+  const inventory: ResourceMap = {};
+  if (seedInventory) {
+    Object.entries(seedInventory).forEach(([resourceKey, amount]) => {
+      if (!amount) return;
+      inventory[resourceKey as ResourceType] = amount;
+    });
+  }
   return {
-    left: `${x}px`,
-    top: `${y}px`,
-    width: `${HEX_WIDTH}px`,
-    height: `${HEX_HEIGHT}px`,
+    id: makeId(type),
+    type,
+    tileId,
+    flagInventory: inventory,
+    construction: {
+      delivered: {},
+      complete: !definition.buildable,
+    },
+    processing: null,
+    lastMessage: definition.buildable ? "Awaiting materials." : "Ready to direct logistics.",
   };
-};
+}
 
-const isNeighbor = (a: HexTile, b: HexTile) => {
-  return axialDirections.some(([dq, dr]) => a.q + dq === b.q && a.r + dr === b.r);
-};
+function makeId(prefix: string): string {
+  return `${prefix}-${Math.random().toString(36).slice(2, 8)}`;
+}
 
-const hasRoadToEmpire = (hex: HexTile) => {
-  return hex.roads.some((neighborId) => {
-    const neighbor = hexById(neighborId);
-    return neighbor?.claimed;
-  });
-};
+function addInventory(map: ResourceMap, resource: ResourceType, amount: number): void {
+  map[resource] = (map[resource] ?? 0) + amount;
+}
 
-const canAfford = (costs: ClaimCost[]) => {
-  return costs.every(({ key, amount }) => (resourceLedger.value[key] ?? 0) >= amount);
-};
+function removeInventory(map: ResourceMap, resource: ResourceType, amount: number): boolean {
+  const current = map[resource] ?? 0;
+  if (current < amount) return false;
+  const next = current - amount;
+  if (next <= 0) {
+    delete map[resource];
+  } else {
+    map[resource] = next;
+  }
+  return true;
+}
 
-const spendResources = (costs: ClaimCost[]) => {
-  costs.forEach(({ key, amount }) => {
-    const current = getResourceCount(key);
-    setResourceCount(key, Math.max(0, current - amount));
-  });
-  loadVault();
-};
+function selectTile(tileId: string): void {
+  selectedTileId.value = tileId;
+}
 
-const formatCost = (costs: ClaimCost[]) => {
-  return costs
-    .map(({ key, amount }) => {
-      const resource = resourceVault.value.find((snapshot) => snapshot.key === key);
-      return `${amount} ${resource?.definition.singular ?? key}`;
-    })
-    .join(" + ");
-};
-
-const deepCloneHex = (hex: HexTile): HexTile => JSON.parse(JSON.stringify(hex)) as HexTile;
-
-const updateHex = (hexId: string, mutator: (draft: HexTile) => HexTile) => {
-  hexes.value = hexes.value.map((hex) => {
-    if (hex.id !== hexId) return hex;
-    const next = deepCloneHex(hex);
-    return mutator(next);
-  });
-};
-
-const selectHex = (hex: HexTile) => {
-  selectedHexId.value = hex.id;
-};
-
-const handleHexClick = (hex: HexTile) => {
-  if (isRoadMode.value) {
-    handleRoadSelection(hex);
+function planBuilding(type: BuildableType): void {
+  const tile = selectedTile.value;
+  if (!tile || tile.isCapital) {
+    statusMessage.value = "Choose a free tile away from the capital.";
     return;
   }
-  selectHex(hex);
-  if (hex.claimed) {
-    zoomedHexId.value = hex.id;
+  if (tile.trees > 0) {
+    statusMessage.value = "That hex is still forested. Clear the tree before staking a claim.";
+    return;
   }
-};
-
-const isRoadMode = ref(false);
-const roadSourceId = ref<string | null>(null);
-
-const toggleRoadMode = () => {
-  isRoadMode.value = !isRoadMode.value;
-  if (!isRoadMode.value) {
-    roadSourceId.value = null;
+  if (tile.buildingId) {
+    statusMessage.value = "That tile already has a flag.";
+    return;
   }
-};
+  const definition = BUILDING_LIBRARY[type];
+  if (definition.requirement && !definition.requirement(tile)) {
+    statusMessage.value = `${definition.name} must be built on a matching hill.`;
+    return;
+  }
+  const building = createBuildingInstance(type, tile.id);
+  buildings.value.push(building);
+  tile.buildingId = building.id;
+  statusMessage.value = `${definition.name} foundation marked. Deliver ${formatCost(definition.cost)} to raise it.`;
+}
 
-const handleRoadSelection = (hex: HexTile) => {
-  if (!roadSourceId.value) {
-    if (!hex.claimed) {
-      setStatus("Roads must start from a claimed hex.", "warn");
+function formatCost(cost: ResourceMap): string {
+  const parts = Object.entries(cost).map(
+    ([resourceKey, amount]) => `${amount} ${RESOURCE_LIBRARY[resourceKey as ResourceType].label}`,
+  );
+  return parts.length ? parts.join(" + ") : "Free";
+}
+
+function getBuildingName(building: BuildingInstance | null | undefined): string {
+  if (!building) return "Empty";
+  return BUILDING_LIBRARY[building.type].name;
+}
+
+function getBuildingById(id: string): BuildingInstance | undefined {
+  return buildings.value.find((building) => building.id === id);
+}
+
+function getBuildingAtTile(tileId: string): BuildingInstance | undefined {
+  return buildings.value.find((building) => building.tileId === tileId);
+}
+
+function getRemainingCost(building: BuildingInstance): ResourceMap {
+  const definition = BUILDING_LIBRARY[building.type];
+  const remaining: ResourceMap = {};
+  Object.entries(definition.cost).forEach(([resourceKey, amount]) => {
+    const resource = resourceKey as ResourceType;
+    const delivered = building.construction.delivered[resource] ?? 0;
+    if ((amount ?? 0) - delivered > 0) {
+      remaining[resource] = (amount ?? 0) - delivered;
+    }
+  });
+  return remaining;
+}
+
+function receiveResource(building: BuildingInstance, resource: ResourceType, amount: number): void {
+  if (!building.construction.complete) {
+    const remaining = getRemainingCost(building);
+    const needed = remaining[resource] ?? 0;
+    if (needed > 0) {
+      building.construction.delivered[resource] = (building.construction.delivered[resource] ?? 0) + amount;
+      const outstanding = getRemainingCost(building);
+      if (Object.keys(outstanding).length === 0) {
+        building.construction.complete = true;
+        building.lastMessage = "Structure completed.";
+        statusMessage.value = `${BUILDING_LIBRARY[building.type].name} is now operational.`;
+      }
       return;
     }
-    roadSourceId.value = hex.id;
-    selectHex(hex);
-    setStatus("Road origin locked. Select a neighboring hex to finish the route.");
-    return;
   }
+  addInventory(building.flagInventory, resource, amount);
+}
 
-  const source = hexById(roadSourceId.value);
-  if (!source) {
-    roadSourceId.value = null;
-    return;
+function calculateNeeds(building: BuildingInstance): Need[] {
+  const definition = BUILDING_LIBRARY[building.type];
+  if (!building.construction.complete) {
+    return Object.entries(getRemainingCost(building)).map(([resourceKey, amount]) => ({
+      resource: resourceKey as ResourceType,
+      amount: amount ?? 0,
+      priority: 10,
+    }));
   }
-
-  if (source.id === hex.id) {
-    roadSourceId.value = null;
-    setStatus("Road building cancelled.", "info");
-    return;
+  if (building.type === "townHall") {
+    return RESOURCE_ORDER.map((resource) => ({
+      resource,
+      amount: TOWN_HALL_SINK_AMOUNT,
+      priority: 1,
+    }));
   }
-  if (!isNeighbor(source, hex)) {
-    setStatus("Only adjacent hexes can be linked by road.", "warn");
-    return;
-  }
-  if (!source.claimed) {
-    setStatus("Select a claimed hex to originate the road.", "warn");
-    roadSourceId.value = null;
-    return;
-  }
-  if (!canAfford(roadCosts)) {
-    setStatus("You need additional Cargo Crates to pave this road.", "warn");
-    roadSourceId.value = null;
-    return;
-  }
-
-  const connect = (fromId: string, toId: string) => {
-    updateHex(fromId, (draft) => {
-      if (!draft.roads.includes(toId)) {
-        draft.roads.push(toId);
+  if (!definition.process) return [];
+  const needs: Need[] = [];
+  if (definition.process.inputs) {
+    Object.entries(definition.process.inputs).forEach(([resourceKey, cost]) => {
+      const resource = resourceKey as ResourceType;
+      const buffer = definition.inputBuffer?.[resource] ?? ((cost ?? 1) * 2);
+      const current = building.flagInventory[resource] ?? 0;
+      if (current < buffer) {
+        needs.push({ resource, amount: buffer - current, priority: 5 });
       }
-      return draft;
     });
-  };
-
-  connect(source.id, hex.id);
-  connect(hex.id, source.id);
-  spendResources(roadCosts);
-  setStatus("Road completed. Supply carts can now cross between the tiles.", "success");
-  if (!hex.claimed) {
-    selectHex(hex);
   }
-  roadSourceId.value = null;
-};
-
-const canClaimSelected = computed(() => {
-  const hex = selectedHex.value;
-  if (!hex || hex.claimed || hex.hasCapital) return false;
-  return hasRoadToEmpire(hex) && canAfford(claimCosts);
-});
-
-const claimSelectedHex = () => {
-  const hex = selectedHex.value;
-  if (!hex) return;
-  if (hex.claimed) {
-    setStatus("Tile already claimed.", "info");
-    return;
+  if (definition.process.special === "mine") {
+    const bread = building.flagInventory.bread ?? 0;
+    if (bread < 2) {
+      needs.push({ resource: "bread", amount: 2 - bread, priority: 5 });
+    }
+    const meat = building.flagInventory.meat ?? 0;
+    if (meat < 2) {
+      needs.push({ resource: "meat", amount: 2 - meat, priority: 4 });
+    }
   }
-  if (!hasRoadToEmpire(hex)) {
-    setStatus("Extend a road from an adjacent claimed tile before annexing this hex.", "warn");
-    return;
-  }
-  if (!canAfford(claimCosts)) {
-    setStatus("You need additional spoils from other games to claim this tile.", "warn");
-    return;
-  }
+  return needs;
+}
 
-  spendResources(claimCosts);
-  updateHex(hex.id, (draft) => {
-    draft.claimed = true;
-    draft.economy = createEconomyState("wilds", draft.terrain);
-    draft.economy.haulingLog.unshift(makeHaulingEvent(`${draft.name} joined the Mountain King's dominion.`));
-    return draft;
+function getReservedAmount(building: BuildingInstance, resource: ResourceType): number {
+  if (!building.construction.complete) return 0;
+  if (building.type === "townHall") return 0;
+  const definition = BUILDING_LIBRARY[building.type];
+  if (definition.inputBuffer?.[resource]) return definition.inputBuffer[resource] ?? 0;
+  const inputRequirement = definition.process?.inputs?.[resource] ?? 0;
+  if (inputRequirement > 0) return inputRequirement * 2;
+  return 0;
+}
+
+function calculateSupply(building: BuildingInstance): Array<{ resource: ResourceType; amount: number }> {
+  if (!building.construction.complete) return [];
+  const supplies: Array<{ resource: ResourceType; amount: number }> = [];
+  RESOURCE_ORDER.forEach((resource) => {
+    const amount = building.flagInventory[resource] ?? 0;
+    if (amount <= 0) return;
+    const reserved = getReservedAmount(building, resource);
+    const available = amount - reserved;
+    if (available > 0) {
+      supplies.push({ resource, amount: available });
+    }
   });
-  setStatus(`${hex.name} has been claimed. Deploy dwarves to spin up production.`, "success");
-};
+  return supplies;
+}
 
-const blueprintGroups = computed(() => {
-  return buildingBlueprints.reduce<Record<BuildingCategory, BuildingBlueprint[]>>(
-    (groups, blueprint) => {
-      groups[blueprint.category].push(blueprint);
-      return groups;
+function findJobBetween(source: BuildingInstance, target: BuildingInstance): TransferJob | null {
+  const supplies = calculateSupply(source);
+  const needs = calculateNeeds(target);
+  if (!supplies.length || !needs.length) return null;
+  let best: TransferJob | null = null;
+  needs.forEach((need) => {
+    const supply = supplies.find((candidate) => candidate.resource === need.resource);
+    if (!supply || supply.amount <= 0) return;
+    if (!best || need.priority > best.priority) {
+      best = {
+        id: makeId("job"),
+        from: source.id,
+        to: target.id,
+        resource: need.resource,
+        priority: need.priority,
+      };
+    }
+  });
+  return best;
+}
+
+function assignJob(road: Road): void {
+  if (road.worker.status !== "idle") return;
+  const from = getBuildingById(road.fromBuildingId);
+  const to = getBuildingById(road.toBuildingId);
+  if (!from || !to) return;
+
+  const forward = findJobBetween(from, to);
+  const backward = findJobBetween(to, from);
+
+  let job: TransferJob | null = null;
+  if (forward && backward) {
+    job = forward.priority >= backward.priority ? forward : backward;
+  } else {
+    job = forward ?? backward ?? null;
+  }
+
+  if (!job) return;
+  const source = getBuildingById(job.from);
+  if (!source) return;
+  if (!removeInventory(source.flagInventory, job.resource, 1)) {
+    return;
+  }
+  road.worker.job = job;
+  road.worker.status = "hauling";
+  road.worker.direction = job.from === road.fromBuildingId ? "forward" : "backward";
+  road.worker.progressMs = 0;
+  road.worker.durationMs = Math.max(1, road.distance) * WORKER_SPEED_MS;
+}
+
+function updateRoads(deltaMs: number): void {
+  roads.value.forEach((road) => {
+    if (road.worker.status === "idle") {
+      assignJob(road);
+      return;
+    }
+    if (!road.worker.job) {
+      road.worker.status = "idle";
+      return;
+    }
+    road.worker.progressMs += deltaMs;
+    if (road.worker.progressMs >= road.worker.durationMs) {
+      const destination = getBuildingById(road.worker.job.to);
+      if (destination) {
+        receiveResource(destination, road.worker.job.resource, 1);
+      }
+      road.worker.job = null;
+      road.worker.status = "idle";
+      road.worker.progressMs = 0;
+      assignJob(road);
+    }
+  });
+}
+
+function resolveProcessIntent(building: BuildingInstance, tile: HexTile | undefined): ProcessIntent | null {
+  const definition = BUILDING_LIBRARY[building.type];
+  const process = definition.process;
+  if (!tile || !process) return null;
+  switch (process.special) {
+    case "woodcutter":
+      return resolveWoodcutterIntent(tile);
+    case "forester":
+      return resolveForesterIntent(tile);
+    case "mine":
+      return resolveMineIntent(building, tile);
+    default:
+      return resolveStandardIntent(building, definition);
+  }
+}
+
+function resolveWoodcutterIntent(tile: HexTile): ProcessIntent | null {
+  const capitalTile = tiles.value.find((candidate) => candidate.id === tile.id);
+  const available = getTilesWithinRadius(tiles.value, tile, 3)
+    .filter((candidate) => candidate.trees > 0 && candidate.forestStatus !== "cutting")
+    .sort((a, b) => hexDistance(tile, a) - hexDistance(tile, b));
+  if (available.length === 0) return null;
+  const target = available[0];
+  const distance = hexDistance(tile, target);
+  const duration = PROCESS_TIME_MS + distance * 4000; // +4s per tile
+  return {
+    label: "Felling trees",
+    durationMs: duration,
+    outputs: { logs: 1 },
+    onStart: () => {
+      target.forestStatus = "cutting";
     },
-    { extraction: [], refinement: [], support: [], military: [] }
+    onComplete: () => {
+      target.trees = 0;
+      target.forestStatus = null;
+    },
+  };
+}
+
+function resolveForesterIntent(tile: HexTile): ProcessIntent | null {
+  const choices = getTilesWithinRadius(tiles.value, tile, 2).filter(
+    (candidate) =>
+      candidate.trees === 0 && !candidate.isCapital && !candidate.buildingId && candidate.forestStatus !== "planting",
   );
-});
+  if (choices.length === 0) return null;
+  const target = choices[Math.floor(Math.random() * choices.length)];
+  target.forestStatus = "planting";
+  return {
+    label: "Planting seedlings",
+    durationMs: PROCESS_TIME_MS,
+    onComplete: () => {
+      target.trees = 1;
+      target.forestStatus = null;
+    },
+  };
+}
 
-const buildStructure = (blueprint: BuildingBlueprint) => {
-  const hex = selectedHex.value;
-  if (!hex || !hex.claimed) {
-    setStatus("Claim the tile before placing structures.", "warn");
-    return;
-  }
-  if (hex.economy.buildings.some((building) => building.blueprintId === blueprint.id)) {
-    setStatus("This structure already exists on the selected hex.", "info");
-    return;
-  }
-  const costEntries = Object.entries(blueprint.cost) as [ResourceKey, number][];
-  if (!canAfford(costEntries.map(([key, amount]) => ({ key, amount })))) {
-    setStatus("Insufficient cross-game resources to commission this structure.", "warn");
-    return;
-  }
+function resolveMineIntent(building: BuildingInstance, tile: HexTile): ProcessIntent | null {
+  if (!tile.hillResource) return null;
+  const bread = building.flagInventory.bread ?? 0;
+  const meat = building.flagInventory.meat ?? 0;
+  let input: ResourceType | null = null;
+  if (bread > 0) input = "bread";
+  else if (meat > 0) input = "meat";
+  if (!input) return null;
+  return {
+    label: "Feeding miners",
+    durationMs: PROCESS_TIME_MS,
+    inputs: { [input]: 1 },
+    outputs: { [tile.hillResource]: 1 },
+  };
+}
 
-  spendResources(costEntries.map(([key, amount]) => ({ key, amount })));
-  updateHex(hex.id, (draft) => {
-    draft.economy.buildings.push({
-      blueprintId: blueprint.id,
-      level: 1,
-      efficiency: 1,
-    });
-    draft.economy.haulingLog.unshift(makeHaulingEvent(`${blueprint.name} raised in ${draft.name}.`));
-    return draft;
-  });
-  setStatus(`${blueprint.name} constructed. Queue a haul to feed it.`, "success");
-};
-
-const resolveEconomy = (hex: HexTile) => {
-  const resources = { ...hex.economy.resources };
-  const events: string[] = [];
-  hex.economy.buildings.forEach((instance) => {
-    const blueprint = blueprintIndex[instance.blueprintId];
-    if (!blueprint) return;
-    const inputs = blueprint.inputs ?? {};
-    const canRun = Object.entries(inputs).every(
-      ([key, amount]) => resources[key as EconomyResource] >= amount
+function resolveStandardIntent(building: BuildingInstance, definition: BuildingDefinition): ProcessIntent | null {
+  const process = definition.process;
+  if (!process) return null;
+  if (process.inputs) {
+    const blocked = Object.entries(process.inputs).some(
+      ([resourceKey, cost]) => (building.flagInventory[resourceKey as ResourceType] ?? 0) < (cost ?? 0),
     );
-    if (!canRun) return;
-    Object.entries(inputs).forEach(([key, amount]) => {
-      resources[key as EconomyResource] -= amount;
-    });
-    const outputAmount = blueprint.output.amount * instance.efficiency;
-    resources[blueprint.output.key] += outputAmount;
-    events.push(
-      `${blueprint.name} delivered ${outputAmount} ${resourceLabels[blueprint.output.key]}.`
-    );
-  });
-  return { resources, events };
-};
+    if (blocked) return null;
+  }
+  return {
+    label: `Processing ${definition.name}`,
+    durationMs: process.durationMs ?? PROCESS_TIME_MS,
+    inputs: process.inputs,
+    outputs: process.outputs,
+  };
+}
 
-const dispatchHaulers = () => {
-  const hex = selectedHex.value;
-  if (!hex || !hex.claimed) {
-    setStatus("Claim a tile to dispatch dwarves.", "warn");
-    return;
-  }
-  if (!hex.economy.buildings.length) {
-    setStatus("Place at least one structure before running a haul.", "warn");
-    return;
-  }
-  const { resources, events } = resolveEconomy(hex);
-  updateHex(hex.id, (draft) => {
-    draft.economy.resources = resources;
-    const entries = events.length ? events : ["No production fired—check your inputs."];
-    const newLogs = entries.map((event) => makeHaulingEvent(event));
-    draft.economy.haulingLog = [...newLogs, ...draft.economy.haulingLog].slice(0, 6);
-    return draft;
+function updateBuildings(deltaMs: number): void {
+  buildings.value.forEach((building) => {
+    if (!building.construction.complete) return;
+    if (!building.processing) {
+      const tile = tiles.value.find((candidate) => candidate.id === building.tileId);
+      const intent = resolveProcessIntent(building, tile);
+      if (!intent) return;
+      if (intent.inputs) {
+        const blocked = Object.entries(intent.inputs).some(
+          ([resourceKey, amount]) => (building.flagInventory[resourceKey as ResourceType] ?? 0) < (amount ?? 0),
+        );
+        if (blocked) return;
+        Object.entries(intent.inputs).forEach(([resourceKey, amount]) => {
+          removeInventory(building.flagInventory, resourceKey as ResourceType, amount ?? 0);
+        });
+      }
+      intent.onStart?.(building, tile!);
+      building.processing = {
+        label: intent.label,
+        remainingMs: intent.durationMs ?? PROCESS_TIME_MS,
+        durationMs: intent.durationMs ?? PROCESS_TIME_MS,
+        intent,
+      };
+      building.lastMessage = intent.label;
+      return;
+    }
+    building.processing.remainingMs -= deltaMs;
+    if (building.processing.remainingMs <= 0) {
+      const tile = tiles.value.find((candidate) => candidate.id === building.tileId);
+      if (building.processing.intent.outputs) {
+        Object.entries(building.processing.intent.outputs).forEach(([resourceKey, amount]) => {
+          addInventory(building.flagInventory, resourceKey as ResourceType, amount ?? 0);
+        });
+      }
+      building.processing.intent.onComplete?.(building, tile!, building.processing.intent);
+      building.processing = null;
+      building.lastMessage = `${BUILDING_LIBRARY[building.type].name} completed a batch.`;
+    }
   });
-  setStatus(
-    events.length ? "The haul completed and goods reached their destinations." : "Supply carts could not find valid production chains.",
-    events.length ? "success" : "warn"
+}
+
+function markRoadAnchor(): void {
+  if (!selectedBuilding.value) {
+    statusMessage.value = "Select a building flag first.";
+    return;
+  }
+  if (roadAnchor.value && roadAnchor.value.id === selectedBuilding.value.id) {
+    roadAnchor.value = null;
+    return;
+  }
+  roadAnchor.value = selectedBuilding.value;
+  statusMessage.value = `${BUILDING_LIBRARY[selectedBuilding.value.type].name} ready as road start. Choose the destination flag next.`;
+}
+
+function connectRoad(): void {
+  if (!roadAnchor.value || !selectedBuilding.value) {
+    statusMessage.value = "Set both endpoints before connecting.";
+    return;
+  }
+  if (roadAnchor.value.id === selectedBuilding.value.id) {
+    statusMessage.value = "Select a different flag to connect.";
+    return;
+  }
+  const existing = roads.value.some(
+    (road) =>
+      (road.fromBuildingId === roadAnchor.value?.id && road.toBuildingId === selectedBuilding.value?.id) ||
+      (road.toBuildingId === roadAnchor.value?.id && road.fromBuildingId === selectedBuilding.value?.id),
   );
-};
-
-const connectedNeighbors = computed(() => {
-  const hex = selectedHex.value;
-  if (!hex) return [];
-  return hex.roads
-    .map((neighborId) => hexById(neighborId))
-    .filter((neighbor): neighbor is HexTile => Boolean(neighbor));
-});
-
-const adjustZoom = (delta: number) => {
-  const next = Math.min(3, Math.max(1, zoomLevel.value + delta));
-  zoomLevel.value = parseFloat(next.toFixed(2));
-};
-
-const focusSelectedHex = () => {
-  const hex = selectedHex.value;
-  if (!hex?.claimed) {
-    setStatus("Only claimed hexes can be zoomed into.", "warn");
+  if (existing) {
+    statusMessage.value = "Those flags are already linked.";
     return;
   }
-  zoomedHexId.value = hex.id;
-  setStatus(`Zoomed into ${hex.name}.`);
-};
+  const startTile = tiles.value.find((tile) => tile.id === roadAnchor.value?.tileId);
+  const endTile = tiles.value.find((tile) => tile.id === selectedBuilding.value?.tileId);
+  if (!startTile || !endTile) return;
+  const distance = Math.max(1, Math.round(hexDistance(startTile, endTile)));
+  roads.value.push({
+    id: makeId("road"),
+    fromBuildingId: roadAnchor.value.id,
+    toBuildingId: selectedBuilding.value.id,
+    distance,
+    worker: {
+      status: "idle",
+      direction: "forward",
+      job: null,
+      progressMs: 0,
+      durationMs: distance * WORKER_SPEED_MS,
+    },
+  });
+  statusMessage.value = `Road laid (${distance} hexes). A courier is now assigned between the two flags.`;
+  roadAnchor.value = null;
+}
+
+function clearAnchor(): void {
+  roadAnchor.value = null;
+}
+
+function processingPercent(building: BuildingInstance | null | undefined): number {
+  if (!building?.processing) return 0;
+  return Math.max(0, 1 - building.processing.remainingMs / building.processing.durationMs);
+}
+
+function tileHasGrain(tile: HexTile): boolean {
+  if (!tile.buildingId) return false;
+  const building = getBuildingById(tile.buildingId);
+  if (!building || !building.construction.complete) return false;
+  return building.type === "farm";
+}
+
+function getHexStyle(tile: HexTile) {
+  const pos = tilePositions.get(tile.id);
+  if (!pos) return {};
+  const left = pos.x - mapExtents.minX + HEX_WIDTH;
+  const top = pos.y - mapExtents.minY + HEX_HEIGHT;
+  return {
+    left: `${left}px`,
+    top: `${top}px`,
+  };
+}
 </script>
 
 <template>
-  <div class="relative min-h-screen overflow-hidden bg-[var(--gradient-hero)] py-10 text-foreground">
-    <div class="absolute inset-0 bg-gradient-to-b from-background/40 via-background/80 to-background" />
-
-    <main class="relative z-10 mx-auto flex w-full max-w-7xl flex-col gap-8 px-4">
-      <section
-        class="rounded-3xl border border-border/40 bg-card/70 p-6 shadow-[var(--shadow-game)] backdrop-blur-lg md:p-8"
-      >
-        <div class="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
-          <div>
-            <p class="text-xs font-semibold uppercase tracking-[0.5em] text-accent">Mountain King</p>
-            <h1 class="mt-3 text-4xl font-black tracking-tight md:text-5xl">
-              Command the Hex Dominion
-            </h1>
-            <p class="mt-3 max-w-2xl text-base text-muted-foreground md:text-lg">
-              Pan across the highland hex map, pave roads by hand, and stitch together a settlers-like supply chain.
-              Every claimed tile unlocks new production chains, but only if your dwarves can haul goods along the roads
-              fed by other game rewards.
-            </p>
-          </div>
-          <div class="grid flex-shrink-0 grid-cols-2 gap-3 text-center md:grid-cols-3">
-            <div class="rounded-2xl border border-border/30 bg-background/60 p-3">
-              <p class="text-[11px] uppercase tracking-[0.4em] text-muted-foreground">Tiles</p>
-              <p class="text-2xl font-bold">{{ claimedTiles }}/{{ totalTiles }}</p>
-            </div>
-            <div class="rounded-2xl border border-border/30 bg-background/60 p-3">
-              <p class="text-[11px] uppercase tracking-[0.4em] text-muted-foreground">Prestige</p>
-              <p class="text-2xl font-bold">{{ totalPrestige }}</p>
-            </div>
-            <div class="rounded-2xl border border-border/30 bg-background/60 p-3">
-              <p class="text-[11px] uppercase tracking-[0.4em] text-muted-foreground">Roads</p>
-              <p class="text-2xl font-bold">{{ totalRoadSegments }}</p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section class="grid gap-8 lg:grid-cols-[1.6fr_1fr]">
-        <div class="rounded-3xl border border-border/40 bg-card/70 p-5 shadow-[var(--shadow-game)] backdrop-blur">
-          <div class="flex flex-wrap items-center justify-between gap-4">
-            <div class="flex items-center gap-3">
-              <MapIcon class="h-6 w-6 text-accent" />
-              <div>
-                <p class="text-xs font-semibold uppercase tracking-[0.45em] text-muted-foreground">
-                  Main Map
-                </p>
-                <p class="text-base font-semibold">Pan & scroll the dominion</p>
-              </div>
-            </div>
-            <div class="flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                class="inline-flex items-center gap-2 rounded-full border border-border/50 px-3 py-1 text-xs font-semibold uppercase tracking-widest transition hover:bg-primary/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                @click="toggleRoadMode"
-              >
-                <Route class="h-4 w-4" />
-                {{ isRoadMode ? "Exit Road Mode" : "Build Road" }}
-              </button>
-              <button
-                type="button"
-                class="inline-flex items-center gap-2 rounded-full border border-border/50 px-3 py-1 text-xs font-semibold uppercase tracking-widest transition hover:bg-primary/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                @click="loadVault"
-              >
-                <RefreshCcw class="h-4 w-4" />
-                Sync Vault
-              </button>
-            </div>
-          </div>
-
-          <p class="mt-3 text-xs uppercase tracking-[0.4em] text-muted-foreground">
-            {{ isRoadMode ? "Road Mode Active" : "Navigation Mode" }}
-          </p>
+  <div class="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-6">
+    <section class="rounded-3xl border border-border/50 bg-card/70 p-6 shadow-[0_20px_80px_rgba(0,0,0,0.35)] backdrop-blur">
+      <div class="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <p class="text-xs font-semibold uppercase tracking-[0.4em] text-muted-foreground">Logistics sandbox</p>
+          <h1 class="text-3xl font-bold text-white">Mountain King</h1>
           <p class="text-sm text-muted-foreground">
-            <template v-if="isRoadMode">
-              {{ roadSourceId ? "Select a neighboring hex to finish the road." : "Choose a claimed origin hex to start the road." }}
-            </template>
-            <template v-else>
-              Click any hex to inspect it. Claimed tiles glow brighter and can be zoomed in on.
-            </template>
+            100 hexes, one capital, and every flag must be connected by hand before workers haul goods.
           </p>
-
-          <div class="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.7fr)_minmax(0,320px)]">
-            <div class="space-y-5">
-              <div class="rounded-2xl border border-border/30 bg-background/60 p-4">
-                <p class="text-xs font-semibold uppercase tracking-[0.4em] text-muted-foreground">
-                  Map Window Guidance
-                </p>
-                <p class="mt-1 text-sm text-muted-foreground">
-                  Drag inside the window or use scroll wheels to move sideways or vertically. The atlas remembers which
-                  hex you tapped and highlights existing roads so you can stitch the frontier together.
-                </p>
-              </div>
-
-              <div class="rounded-3xl border border-border/40 bg-background/80 shadow-inner">
-                <div
-                  class="flex items-center justify-between border-b border-border/30 px-5 py-3 text-xs uppercase tracking-[0.35em] text-muted-foreground"
-                >
-                  <span>Atlas Window</span>
-                  <span class="text-[10px] text-muted-foreground/70">Scroll both axes to explore</span>
-                </div>
-                <div
-                  class="h-[560px] overflow-auto rounded-b-3xl border-t border-border/30 bg-[radial-gradient(circle_at_center,_rgba(255,255,255,0.08),_transparent_45%)] p-4"
-                >
-                  <div class="relative min-h-[900px] min-w-[1200px]" :style="mapCanvasStyle">
-                    <button
-                      v-for="hex in hexes"
-                      :key="hex.id"
-                      type="button"
-                      class="hex-cell absolute flex flex-col items-center justify-center border text-center transition"
-                      :class="[
-                        terrainGradients[hex.terrain],
-                        hex.claimed ? 'border-primary/70 shadow-lg shadow-primary/30' : 'border-border/50 opacity-70',
-                        selectedHex?.id === hex.id ? 'ring-4 ring-accent/60' : '',
-                        hex.hasCapital ? 'capital-edge' : '',
-                      ]"
-                      :style="tilePositionStyle(hex)"
-                      @click="handleHexClick(hex)"
-                    >
-                      <span class="text-xs font-semibold uppercase tracking-widest">{{ hex.name }}</span>
-                      <span class="text-[10px] uppercase tracking-[0.3em] text-muted-foreground">
-                        {{ terrainLabels[hex.terrain] }}
-                      </span>
-                      <span
-                        class="mt-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.4em]"
-                        :class="hex.claimed ? 'bg-primary/60 text-background' : hasRoadToEmpire(hex) ? 'bg-primary/20 text-primary' : 'bg-background/60 text-muted-foreground'"
-                      >
-                        {{ hex.claimed ? "Claimed" : hasRoadToEmpire(hex) ? "Linked" : "Wild" }}
-                      </span>
-                      <span v-if="hex.roads.length" class="mt-1 text-[10px] text-muted-foreground">
-                        {{ hex.roads.length }} road{{ hex.roads.length === 1 ? "" : "s" }}
-                      </span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div class="w-full space-y-4 rounded-2xl border border-border/40 bg-background/80 p-4">
-              <div>
-                <p class="text-xs font-semibold uppercase tracking-[0.4em] text-muted-foreground">
-                  Resource Vault
-                </p>
-                <ul class="mt-3 space-y-2">
-                  <li
-                    v-for="snapshot in resourceVault"
-                    :key="snapshot.key"
-                    class="flex items-center justify-between text-sm"
-                  >
-                    <span class="text-muted-foreground">{{ snapshot.definition.singular }}</span>
-                    <span class="font-semibold">{{ snapshot.amount }}</span>
-                  </li>
-                </ul>
-              </div>
-              <div>
-                <p class="text-xs font-semibold uppercase tracking-[0.4em] text-muted-foreground">Legend</p>
-                <ul class="mt-3 space-y-2 text-xs text-muted-foreground">
-                  <li v-for="terrain in terrainPalette" :key="terrain" class="flex items-center gap-2">
-                    <span
-                      class="inline-block h-3 w-3 rounded-full"
-                      :class="{
-                        'bg-slate-500': terrain === 'granite',
-                        'bg-sky-500': terrain === 'frost',
-                        'bg-emerald-500': terrain === 'evergreen',
-                        'bg-orange-500': terrain === 'ember',
-                        'bg-purple-500': terrain === 'glimmer',
-                      }"
-                    />
-                    {{ terrainLabels[terrain] }}
-                  </li>
-                </ul>
-              </div>
-            </div>
-          </div>
-
-          <div
-            v-if="statusMessage"
-            class="mt-4 rounded-2xl border border-border/40 px-4 py-3 text-sm"
-            :class="{
-              'bg-primary/10 text-primary': statusMessage.tone === 'info',
-              'bg-emerald-500/15 text-emerald-300': statusMessage.tone === 'success',
-              'bg-amber-500/15 text-amber-200': statusMessage.tone === 'warn',
-            }"
+        </div>
+        <div class="flex flex-wrap items-center justify-end gap-3">
+          <button
+            type="button"
+            class="flex items-center gap-2 rounded-full border border-border/60 px-4 py-2 text-xs font-semibold uppercase tracking-[0.3em] text-white transition hover:border-primary hover:text-primary"
+            @click="goHome"
           >
-            {{ statusMessage.text }}
+            <ArrowLeft class="h-4 w-4" />
+            Back to hub
+          </button>
+          <div class="flex items-center gap-2 rounded-full border border-border/50 px-4 py-2 text-xs text-muted-foreground">
+            <Clock3 class="h-4 w-4" />
+            Processing takes 30s • 1s per hex on roads
           </div>
         </div>
+      </div>
+      <p class="mt-4 rounded-2xl border border-border/40 bg-background/60 px-4 py-3 text-sm text-muted-foreground">
+        {{ statusMessage }}
+      </p>
+    </section>
 
-        <div class="space-y-5">
-          <section class="rounded-3xl border border-border/40 bg-card/70 p-5 shadow-[var(--shadow-game)] backdrop-blur">
-            <div class="flex items-center gap-3">
-              <Mountain class="h-6 w-6 text-accent" />
-              <div>
-                <p class="text-xs font-semibold uppercase tracking-[0.45em] text-muted-foreground">Hex Detail</p>
-                <h2 class="text-xl font-bold">{{ selectedHex?.name }}</h2>
-              </div>
+    <section class="rounded-3xl border border-border/40 bg-card/70 p-6 shadow-[var(--shadow-game)]">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <Hammer class="h-6 w-6 text-primary" />
+          <div>
+            <p class="text-xs font-semibold uppercase tracking-[0.4em] text-muted-foreground">Stockpile</p>
+            <h2 class="text-xl font-semibold text-white">Capital Inventory</h2>
+          </div>
+        </div>
+        <p class="text-xs text-muted-foreground">Town Hall absorbs every processed good before redistributing supplies.</p>
+      </div>
+      <div class="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div
+          v-for="resource in RESOURCE_ORDER"
+          :key="resource"
+          class="rounded-2xl border border-border/40 bg-background/60 p-4"
+        >
+          <div class="flex items-center justify-between text-sm font-semibold text-white">
+            <span>{{ RESOURCE_LIBRARY[resource].label }}</span>
+            <span>{{ globalInventory[resource] ?? 0 }}</span>
+          </div>
+          <p class="text-[11px] uppercase tracking-[0.3em] text-muted-foreground">
+            {{ RESOURCE_LIBRARY[resource].role }} {{ RESOURCE_LIBRARY[resource].note ? `• ${RESOURCE_LIBRARY[resource].note}` : "" }}
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="grid gap-6 lg:grid-cols-[2fr,1fr]">
+      <div class="rounded-3xl border border-border/40 bg-card/70 p-6 shadow-[var(--shadow-game)]">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div class="flex items-center gap-3">
+            <Compass class="h-6 w-6 text-primary" />
+            <div>
+              <p class="text-xs font-semibold uppercase tracking-[0.45em] text-muted-foreground">Hex map</p>
+              <h2 class="text-2xl font-semibold text-white">Settled Valley</h2>
             </div>
+          </div>
+          <div class="text-xs text-muted-foreground">
+            {{ TOTAL_TILES }} tiles · {{ forestTileCount }} with trees · {{ hillTileCount }} hills
+          </div>
+        </div>
+        <div class="mt-6 overflow-auto">
+          <div class="hex-map" :style="mapStyle">
+            <button
+              v-for="tile in tiles"
+              :key="tile.id"
+              type="button"
+              class="hex-button"
+              :class="{
+                'hex-selected': tile.id === selectedTileId,
+                'hex-forest': tile.trees > 0,
+                'hex-grain': tileHasGrain(tile),
+                'hex-forest-cutting': tile.forestStatus === 'cutting',
+                'hex-forest-planting': tile.forestStatus === 'planting',
+                'hex-hill': tile.hillResource,
+                'hex-capital': tile.isCapital,
+                'hex-has-building': tile.buildingId,
+              }"
+              :style="getHexStyle(tile)"
+              @click="selectTile(tile.id)"
+            >
+              <div class="text-[10px] font-semibold uppercase tracking-[0.3em] text-slate-200">
+                {{ tile.col }},{{ tile.row }}
+              </div>
+              <div class="text-xs font-semibold text-white">
+                {{ tile.isCapital ? "Keep" : getBuildingName(getBuildingAtTile(tile.id)) }}
+              </div>
+              <div v-if="tile.trees" class="text-[10px] text-emerald-300">
+                Tree
+              </div>
+              <div v-else-if="tile.forestStatus === 'planting'" class="text-[10px] text-green-200">
+                Planting
+              </div>
+              <div v-else-if="tile.forestStatus === 'cutting'" class="text-[10px] text-emerald-100">
+                Clearing
+              </div>
+              <div v-if="tile.hillResource" class="text-[10px] text-amber-200">
+                {{ tile.hillResource === "ironOre" ? "Iron hill" : `${tile.hillResource} hill` }}
+              </div>
+              <div v-if="tile.buildingId" class="mt-1 text-[10px] text-primary-foreground">
+                <Flag class="hex-flag-icon" />
+              </div>
+            </button>
+          </div>
+        </div>
+      </div>
 
-            <p class="mt-2 text-sm text-muted-foreground">
-              {{ terrainLabels[selectedHex?.terrain ?? "granite"] }} —
-              <span class="font-semibold" :class="selectedHex?.claimed ? 'text-primary' : 'text-muted-foreground'">
-                {{ selectedHex?.claimed ? "Claimed" : "Unclaimed" }}
+      <div class="flex flex-col gap-6">
+        <div class="rounded-3xl border border-border/40 bg-card/70 p-5">
+          <div class="flex items-center gap-3">
+            <Flag class="h-5 w-5 text-primary" />
+            <div>
+              <p class="text-xs font-semibold uppercase tracking-[0.45em] text-muted-foreground">Selected tile</p>
+              <h2 class="text-xl font-semibold text-white">
+                {{ selectedTile ? `${selectedTile.col},${selectedTile.row}` : "None" }}
+              </h2>
+            </div>
+          </div>
+
+          <div v-if="selectedTile" class="mt-4 space-y-4 text-sm text-muted-foreground">
+            <p>
+              Trees:
+              <span class="font-semibold text-white">{{ selectedTile.trees }}</span>
+              · Hill:
+              <span class="font-semibold text-white">
+                {{ selectedTile.hillResource ? selectedTile.hillResource : "None" }}
               </span>
             </p>
 
-            <div class="mt-4 flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                class="inline-flex items-center gap-2 rounded-full border border-border/50 px-3 py-1 text-xs font-semibold uppercase tracking-widest transition hover:bg-primary/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                @click="claimSelectedHex"
-                :disabled="!canClaimSelected"
-                :class="{ 'opacity-50 cursor-not-allowed': !canClaimSelected }"
-              >
-                <Hammer class="h-4 w-4" />
-                Claim Tile
-              </button>
-              <button
-                type="button"
-                class="inline-flex items-center gap-2 rounded-full border border-border/50 px-3 py-1 text-xs font-semibold uppercase tracking-widest transition hover:bg-primary/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                @click="focusSelectedHex"
-              >
-                <Compass class="h-4 w-4" />
-                Zoom Tile
-              </button>
-              <button
-                type="button"
-                class="inline-flex items-center gap-2 rounded-full border border-border/50 px-3 py-1 text-xs font-semibold uppercase tracking-widest transition hover:bg-primary/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                @click="dispatchHaulers"
-              >
-                <Package class="h-4 w-4" />
-                Dispatch Dwarves
-              </button>
-            </div>
+            <div v-if="selectedBuilding">
+              <div class="rounded-2xl border border-border/30 bg-background/60 p-4 text-white">
+                <p class="text-xs font-semibold uppercase tracking-[0.4em] text-muted-foreground">
+                  {{ selectedDefinition?.category }}
+                </p>
+                <h3 class="text-lg font-semibold">{{ selectedDefinition?.name }}</h3>
+                <p class="text-sm text-muted-foreground">{{ selectedDefinition?.description }}</p>
 
-            <div class="mt-4 rounded-2xl border border-border/30 bg-background/60 p-4">
-              <p class="text-xs font-semibold uppercase tracking-[0.4em] text-muted-foreground">
-                Claim Requirements
-              </p>
-              <p class="mt-1 text-sm text-foreground">
-                {{ formatCost(claimCosts) }}
-              </p>
-              <p class="text-xs text-muted-foreground">
-                Costs are paid from other minigames. Roads must link the tile to your empire before claiming.
-              </p>
-            </div>
-
-            <div class="mt-4 space-y-3">
-              <p class="text-xs font-semibold uppercase tracking-[0.4em] text-muted-foreground">Road Links</p>
-              <div class="flex flex-wrap gap-2">
-                <span
-                  v-if="!connectedNeighbors.length"
-                  class="rounded-full border border-dashed border-border/50 px-3 py-1 text-xs text-muted-foreground"
-                >
-                  No active links.
-                </span>
-                <span
-                  v-for="neighbor in connectedNeighbors"
-                  :key="neighbor.id"
-                  class="rounded-full border border-border/50 px-3 py-1 text-xs"
-                  :class="neighbor.claimed ? 'text-primary' : 'text-muted-foreground'"
-                >
-                  {{ neighbor.name }}
-                </span>
-              </div>
-            </div>
-
-            <div class="mt-5 grid gap-3 rounded-2xl border border-border/30 bg-background/70 p-4">
-              <p class="text-xs font-semibold uppercase tracking-[0.4em] text-muted-foreground">Economy</p>
-              <ul class="grid grid-cols-2 gap-3 text-sm">
-                <li
-                  v-for="resource in economyResourcesOrder"
-                  :key="resource"
-                  class="rounded-xl border border-border/30 bg-card/70 px-3 py-2"
-                >
-                  <p class="text-[10px] uppercase tracking-[0.4em] text-muted-foreground">
-                    {{ resourceLabels[resource] }}
-                  </p>
-                  <p class="text-xl font-semibold">
-                    {{ selectedHex?.economy.resources[resource] ?? 0 }}
-                  </p>
-                </li>
-              </ul>
-            </div>
-
-            <div class="mt-5">
-              <p class="text-xs font-semibold uppercase tracking-[0.4em] text-muted-foreground">Hauling Log</p>
-              <ul class="mt-2 space-y-2 text-xs text-muted-foreground">
-                <li
-                  v-for="event in selectedHex?.economy.haulingLog"
-                  :key="event.id"
-                  class="rounded-xl border border-border/20 bg-background/60 px-3 py-2"
-                >
-                  <span class="font-semibold text-foreground">{{ event.timestamp }}</span>
-                  — {{ event.detail }}
-                </li>
-                <li v-if="!selectedHex?.economy.haulingLog.length" class="text-muted-foreground">
-                  No hauls recorded yet. Dispatch dwarves to move goods.
-                </li>
-              </ul>
-            </div>
-          </section>
-
-          <section class="rounded-3xl border border-border/40 bg-card/70 p-5 shadow-[var(--shadow-game)] backdrop-blur">
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-3">
-                <Shield class="h-6 w-6 text-accent" />
-                <div>
-                  <p class="text-xs font-semibold uppercase tracking-[0.45em] text-muted-foreground">
-                    Zoomed Hex
-                  </p>
-                  <h2 class="text-xl font-semibold">{{ zoomedHex?.name }}</h2>
+                <div v-if="!selectedBuilding.construction.complete" class="mt-3 space-y-2">
+                  <p class="text-xs uppercase tracking-[0.3em] text-muted-foreground">Foundation needs</p>
+                  <ul class="space-y-1 text-sm">
+                    <li
+                      v-for="(amount, resourceKey) in selectedRemainingCost"
+                      :key="resourceKey"
+                      class="flex items-center justify-between"
+                    >
+                      <span>{{ RESOURCE_LIBRARY[resourceKey as ResourceType].label }}</span>
+                      <span>{{ amount }}</span>
+                    </li>
+                  </ul>
                 </div>
-              </div>
-              <div class="flex gap-2">
-                <button
-                  type="button"
-                  class="rounded-full border border-border/50 p-2 text-xs hover:bg-primary/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                  @click="adjustZoom(-0.2)"
-                >
-                  <ZoomOut class="h-4 w-4" />
-                </button>
-                <button
-                  type="button"
-                  class="rounded-full border border-border/50 p-2 text-xs hover:bg-primary/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                  @click="adjustZoom(0.2)"
-                >
-                  <ZoomIn class="h-4 w-4" />
-                </button>
-              </div>
-            </div>
 
-            <div class="mt-4">
-              <div
-                class="mx-auto flex h-64 w-64 items-center justify-center rounded-full border border-border/30 bg-background/70"
-              >
-                <div
-                  class="hex-cell relative flex h-48 w-48 flex-col items-center justify-center border text-center shadow-xl transition"
-                  :class="[
-                    zoomedHex?.claimed ? 'border-primary/70 shadow-primary/30' : 'border-border/40 opacity-60',
-                    zoomedHex ? terrainGradients[zoomedHex.terrain] : '',
-                  ]"
-                  :style="{ transform: `scale(${zoomLevel})` }"
-                >
-                  <span class="text-xs font-semibold uppercase tracking-[0.4em]">
-                    {{ zoomedHex?.name }}
-                  </span>
-                  <span class="text-[10px] uppercase tracking-[0.4em] text-muted-foreground">
-                    {{ zoomedHex ? terrainLabels[zoomedHex.terrain] : "" }}
-                  </span>
-                  <span
-                    class="mt-2 rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.45em]"
-                    :class="zoomedHex?.claimed ? 'bg-primary/70 text-background' : 'bg-background/60 text-muted-foreground'"
-                  >
-                    {{ zoomedHex?.claimed ? "Claimed" : "Wild" }}
-                  </span>
-                </div>
-              </div>
-              <p class="mt-3 text-center text-xs text-muted-foreground">
-                Use zoom controls or focus a claimed tile to inspect its layout.
-              </p>
-            </div>
-          </section>
-        </div>
-      </section>
-
-      <section class="rounded-3xl border border-border/40 bg-card/70 p-6 shadow-[var(--shadow-game)] backdrop-blur">
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <div class="flex items-center gap-3">
-            <Trees class="h-6 w-6 text-accent" />
-            <div>
-              <p class="text-xs font-semibold uppercase tracking-[0.45em] text-muted-foreground">
-                Settlers Economy
-              </p>
-              <h2 class="text-2xl font-bold">Blueprint Ledger</h2>
-            </div>
-          </div>
-          <p class="text-sm text-muted-foreground">
-            Buildings consume and produce goods. Dwarves haul outputs along roads you build manually.
-          </p>
-        </div>
-
-        <div class="mt-6 grid gap-5 md:grid-cols-2">
-          <div
-            v-for="(blueprints, category) in blueprintGroups"
-            :key="category"
-            class="rounded-2xl border border-border/30 bg-background/60 p-4"
-          >
-            <p class="text-xs font-semibold uppercase tracking-[0.4em] text-muted-foreground">
-              {{ category }}
-            </p>
-            <ul class="mt-4 space-y-3">
-              <li
-                v-for="blueprint in blueprints"
-                :key="blueprint.id"
-                class="rounded-2xl border border-border/30 bg-card/70 p-4"
-              >
-                <div class="flex items-center justify-between gap-3">
-                  <div>
-                    <p class="text-sm font-semibold uppercase tracking-wide">{{ blueprint.name }}</p>
-                    <p class="text-xs text-muted-foreground">{{ blueprint.description }}</p>
+                <div v-else>
+                  <div class="mt-3">
+                    <p class="text-xs uppercase tracking-[0.3em] text-muted-foreground">Flag inventory</p>
+                    <div class="mt-2 flex flex-wrap gap-2">
+                      <span
+                        v-for="[resourceKey, amount] in Object.entries(selectedBuilding.flagInventory)"
+                        :key="resourceKey"
+                        class="rounded-full border border-border/40 px-3 py-1 text-xs"
+                      >
+                        {{ RESOURCE_LIBRARY[resourceKey as ResourceType].label }}: {{ amount }}
+                      </span>
+                      <span v-if="Object.keys(selectedBuilding.flagInventory).length === 0" class="text-xs text-muted-foreground">
+                        Empty flag
+                      </span>
+                    </div>
                   </div>
-                  <button
-                    type="button"
-                    class="rounded-full border border-border/40 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.4em] transition hover:bg-primary/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                    :class="{
-                      'opacity-50 cursor-not-allowed':
-                        !canAfford(Object.entries(blueprint.cost).map(([key, amount]) => ({ key: key as ResourceKey, amount: amount as number }))),
-                    }"
-                    @click="buildStructure(blueprint)"
-                  >
-                    <Pickaxe class="mr-1 inline h-3.5 w-3.5" />
-                    Build
-                  </button>
+
+                  <div class="mt-3">
+                    <p class="text-xs uppercase tracking-[0.3em] text-muted-foreground">Processing</p>
+                    <div v-if="selectedBuilding.processing" class="mt-2">
+                      <div class="flex items-center gap-2 text-xs">
+                        <Loader2 class="h-4 w-4 animate-spin text-primary" />
+                        {{ selectedBuilding.processing.label }}
+                      </div>
+                      <div class="mt-2 h-2 rounded-full bg-border/40">
+                        <div
+                          class="h-full rounded-full bg-primary"
+                          :style="{ width: `${Math.round(processingPercent(selectedBuilding) * 100)}%` }"
+                        />
+                      </div>
+                    </div>
+                    <p v-else class="text-xs text-muted-foreground">Idle until inputs arrive.</p>
+                  </div>
                 </div>
-                <p class="mt-2 text-xs text-muted-foreground">
-                  Input:
-                  {{
-                    blueprint.inputs
-                      ? Object.entries(blueprint.inputs)
-                          .map(([key, amount]) => `${amount} ${resourceLabels[key as EconomyResource]}`)
-                          .join(", ")
-                      : "None"
-                  }}
-                </p>
-                <p class="text-xs text-muted-foreground">
-                  Output: {{ blueprint.output.amount }} {{ resourceLabels[blueprint.output.key] }}
-                </p>
-                <p class="text-xs text-muted-foreground">
-                  Cost:
-                  {{
-                    Object.entries(blueprint.cost)
-                      .map(
-                        ([key, amount]) =>
-                          `${amount} ${resourceVault.find((snapshot) => snapshot.key === key)?.definition.singular ?? key}`
-                      )
-                      .join(" + ")
-                  }}
-                </p>
-              </li>
-            </ul>
+              </div>
+
+              <div class="mt-4 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  class="rounded-full border border-border/40 px-4 py-2 text-xs font-semibold uppercase tracking-[0.3em] text-white transition hover:border-primary hover:text-primary"
+                  @click="markRoadAnchor"
+                >
+                  {{ roadAnchor?.id === selectedBuilding.id ? "Anchored" : "Set road start" }}
+                </button>
+                <button
+                  v-if="roadAnchor && roadAnchor.id !== selectedBuilding.id"
+                  type="button"
+                  class="rounded-full border border-primary/60 px-4 py-2 text-xs font-semibold uppercase tracking-[0.3em] text-primary transition hover:bg-primary/10"
+                  @click="connectRoad"
+                >
+                  Connect to {{ BUILDING_LIBRARY[roadAnchor.type].name }}
+                </button>
+                <button
+                  v-if="roadAnchor"
+                  type="button"
+                  class="rounded-full border border-border/40 px-3 py-2 text-xs text-muted-foreground hover:text-white"
+                  @click="clearAnchor"
+                >
+                  Clear anchor
+                </button>
+              </div>
+
+              <div class="mt-3 text-xs text-muted-foreground">
+                Active roads: {{ selectedRoads.length }}
+              </div>
+            </div>
+
+            <div v-else>
+              <p class="text-xs uppercase tracking-[0.4em] text-muted-foreground">Plan a building</p>
+              <div class="mt-3 space-y-3">
+                <div v-for="group in buildableGroups" :key="group.category" class="rounded-2xl border border-border/40 p-3">
+                  <p class="text-[11px] uppercase tracking-[0.3em] text-muted-foreground">{{ group.category }}</p>
+                  <div class="mt-2 space-y-2">
+                    <div
+                      v-for="definition in group.definitions"
+                      :key="definition.type"
+                      class="rounded-xl border border-border/30 bg-background/70 p-3 text-white"
+                    >
+                      <div class="flex items-center justify-between text-sm font-semibold">
+                        <span>{{ definition.name }}</span>
+                        <button
+                          type="button"
+                          class="rounded-full border border-border/40 px-3 py-1 text-[10px] uppercase tracking-[0.3em] transition hover:border-primary hover:text-primary"
+                          @click="planBuilding(definition.type as BuildableType)"
+                        >
+                          Place
+                        </button>
+                      </div>
+                      <p class="text-xs text-muted-foreground">{{ definition.description }}</p>
+                      <p class="text-[11px] text-muted-foreground">Cost: {{ formatCost(definition.cost) }}</p>
+                      <p v-if="definition.requirement" class="text-[11px] text-amber-300">
+                        Special: requires a matching tile (e.g., hill for mines).
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <p v-else class="mt-4 text-sm text-muted-foreground">Select a tile on the board to inspect or plan.</p>
+        </div>
+
+        <div class="rounded-3xl border border-border/40 bg-card/70 p-5 shadow-[var(--shadow-game)]">
+          <div class="flex items-center gap-3">
+            <Route class="h-5 w-5 text-primary" />
+            <div>
+              <p class="text-xs font-semibold uppercase tracking-[0.4em] text-muted-foreground">Roads & couriers</p>
+              <h2 class="text-xl font-semibold text-white">Flag connections</h2>
+            </div>
+          </div>
+
+          <div class="mt-4 space-y-3">
+            <p class="text-xs text-muted-foreground">
+              Every road hosts one worker who hauls goods between both flags. Without roads, construction sites starve.
+            </p>
+
+            <div v-if="roads.length === 0" class="rounded-2xl border border-dashed border-border/40 p-4 text-sm text-muted-foreground">
+              No roads yet. Anchor a flag, select another, and connect them to assign a courier.
+            </div>
+
+            <div v-for="road in roads" :key="road.id" class="rounded-2xl border border-border/30 bg-background/60 p-4 text-sm">
+              <div class="flex flex-wrap items-center justify-between gap-2 text-white">
+                <span>
+                  {{ getBuildingName(getBuildingById(road.fromBuildingId)) }}
+                  →
+                  {{ getBuildingName(getBuildingById(road.toBuildingId)) }}
+                </span>
+                <span class="text-xs text-muted-foreground">{{ road.distance }} hexes</span>
+              </div>
+              <p class="text-xs text-muted-foreground">
+                Worker:
+                <span v-if="road.worker.status === 'hauling'" class="text-white">
+                  Carrying {{ road.worker.job ? RESOURCE_LIBRARY[road.worker.job.resource].label : "cargo" }}
+                </span>
+                <span v-else class="text-white">Idle</span>
+              </p>
+              <div class="mt-2 h-2 rounded-full bg-border/40">
+                <div
+                  class="h-full rounded-full bg-primary transition-all"
+                  :style="{
+                    width:
+                      road.worker.status === 'hauling'
+                        ? `${Math.min(100, Math.round((road.worker.progressMs / road.worker.durationMs) * 100))}%`
+                        : '0%',
+                  }"
+                />
+              </div>
+            </div>
           </div>
         </div>
-      </section>
-    </main>
+      </div>
+    </section>
   </div>
 </template>
 
 <style scoped>
-.hex-cell {
-  clip-path: polygon(25% 6.7%, 75% 6.7%, 100% 50%, 75% 93.3%, 25% 93.3%, 0% 50%);
-  min-width: 90px;
+.hex-map {
+  position: relative;
+  min-width: 640px;
+  padding-bottom: 1rem;
 }
 
-.capital-edge {
-  box-shadow: 0 0 25px rgba(255, 255, 255, 0.25);
+.hex-button {
+  position: absolute;
+  width: 112px;
+  height: 98px;
+  clip-path: polygon(25% 6%, 75% 6%, 100% 50%, 75% 94%, 25% 94%, 0% 50%);
+  background: linear-gradient(180deg, rgba(51, 65, 85, 0.8), rgba(15, 23, 42, 0.9));
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
+  transition: transform 0.2s ease, border 0.2s ease, box-shadow 0.2s ease;
+}
+
+.hex-button:hover {
+  transform: translateY(-2px);
+  border-color: rgba(248, 250, 252, 0.5);
+}
+
+.hex-selected {
+  border-color: rgba(250, 204, 21, 0.9);
+  box-shadow: 0 0 15px rgba(250, 204, 21, 0.4);
+}
+
+.hex-forest {
+  background: linear-gradient(180deg, rgba(15, 118, 110, 0.7), rgba(6, 78, 59, 0.8));
+}
+
+.hex-grain {
+  background: linear-gradient(180deg, rgba(234, 179, 8, 0.8), rgba(202, 138, 4, 0.9));
+  border-color: rgba(251, 191, 36, 0.8);
+  color: #1b1302;
+}
+
+.hex-forest-cutting {
+  background: linear-gradient(180deg, rgba(4, 47, 46, 0.9), rgba(6, 95, 70, 0.85));
+  border-color: rgba(16, 185, 129, 0.5);
+}
+
+.hex-forest-planting {
+  background: linear-gradient(180deg, rgba(187, 247, 208, 0.9), rgba(34, 197, 94, 0.8));
+  border-color: rgba(134, 239, 172, 0.9);
+}
+
+.hex-hill {
+  border-color: rgba(244, 114, 182, 0.5);
+}
+
+.hex-capital {
+  border-color: rgba(56, 189, 248, 0.9);
+  box-shadow: 0 0 20px rgba(56, 189, 248, 0.4);
+}
+
+.hex-has-building {
+  border-width: 2px;
+  border-color: rgba(248, 113, 113, 0.6);
+  box-shadow: 0 0 18px rgba(248, 113, 113, 0.35);
+}
+
+.hex-flag-icon {
+  margin: 0 auto;
+  height: 20px;
+  width: 20px;
+  color: #f87171;
+  filter: drop-shadow(0 0 4px rgba(248, 113, 113, 0.6));
 }
 </style>
