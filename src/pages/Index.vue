@@ -42,7 +42,7 @@ const mountainKingGame: Minigame = {
 
 const minigames: Minigame[] = [
   { name: "Battle Arena", icon: Sword, path: "/battle-arena" },
-  { name: "Shield Defense", icon: Shield, path: "/shield-defense" },
+  { name: "Dwarven Defense", icon: Shield, path: "/dwarven-defense" },
   { name: "Forge Master", icon: Hammer, path: "/forge-master" },
   { name: "Trophy Hunt", icon: Trophy, path: "/trophy-hunt" },
   { name: "Gold Rush", icon: Coins, path: "/gold-rush" },

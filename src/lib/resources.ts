@@ -7,11 +7,11 @@ export const RESOURCES = {
     plural: "Arena Crests",
     summary: "Awarded for enduring the full Battle Arena onslaught.",
   },
-  shieldDefense: {
-    slug: "shield-defense",
-    singular: "Bulwark Sigil",
-    plural: "Bulwark Sigils",
-    summary: "Earned by keeping the ward intact during Shield Defense.",
+  dwarvenDefense: {
+    slug: "dwarven-defense",
+    singular: "Bastion Crest",
+    plural: "Bastion Crests",
+    summary: "Granted for holding the keep throughout Dwarven Defense.",
   },
   forgeMaster: {
     slug: "forge-master",
@@ -102,4 +102,3 @@ export const getResourceSnapshots = (): ResourceSnapshot[] => {
     amount: getResourceCount(key),
   }));
 };
-

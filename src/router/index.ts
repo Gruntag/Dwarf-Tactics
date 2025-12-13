@@ -34,9 +34,9 @@ const router = createRouter({
       component: () => import("@/pages/TrophyHunt.vue"),
     },
     {
-      path: "/shield-defense",
-      name: "shield-defense",
-      component: () => import("@/pages/ShieldDefense.vue"),
+      path: "/dwarven-defense",
+      name: "dwarven-defense",
+      component: () => import("@/pages/DwarvenDefense.vue"),
     },
     {
       path: "/gold-rush",
