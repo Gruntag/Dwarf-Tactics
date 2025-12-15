@@ -29,9 +29,9 @@ const router = createRouter({
       component: () => import("@/pages/ForgeMaster.vue"),
     },
     {
-      path: "/trophy-hunt",
-      name: "trophy-hunt",
-      component: () => import("@/pages/TrophyHunt.vue"),
+      path: "/dwarven-tactics",
+      name: "dwarven-tactics",
+      component: () => import("@/pages/DwarvenTactics.vue"),
     },
     {
       path: "/dwarven-defense",

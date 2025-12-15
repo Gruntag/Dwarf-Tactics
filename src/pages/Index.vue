@@ -13,6 +13,7 @@ import {
   Flame,
   Diamond,
   Train,
+  Castle,
 } from "lucide-vue-next";
 import gruntagDwarf from "@/assets/gruntag-dwarf.jpg";
 import { getResourceSnapshots, type ResourceSnapshot } from "@/lib/resources";
@@ -44,7 +45,7 @@ const minigames: Minigame[] = [
   { name: "Battle Arena", icon: Sword, path: "/battle-arena" },
   { name: "Dwarven Defense", icon: Shield, path: "/dwarven-defense" },
   { name: "Forge Master", icon: Hammer, path: "/forge-master" },
-  { name: "Trophy Hunt", icon: Trophy, path: "/trophy-hunt" },
+  { name: "Dwarven Tactics", icon: Castle, path: "/dwarven-tactics" },
   { name: "Gold Rush", icon: Coins, path: "/gold-rush" },
   { name: "Skull Crusher", icon: Skull, path: "/skull-crusher" },
   { name: "Dragon Fire", icon: Flame, path: "/dragon-fire" },
