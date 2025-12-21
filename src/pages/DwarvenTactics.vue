@@ -3,6 +3,18 @@ import { computed, onBeforeUnmount, ref } from "vue";
 import { useRouter } from "vue-router";
 import { ArrowLeft, Brain, Castle, RotateCcw } from "lucide-vue-next";
 import { toast } from "@/composables/useToast";
+import whitePawn from "@/assets/chess_pieces/white-pawn.png";
+import whiteKnight from "@/assets/chess_pieces/white-knight.png";
+import whiteBishop from "@/assets/chess_pieces/white-bishop.png";
+import whiteRook from "@/assets/chess_pieces/white-rook.png";
+import whiteQueen from "@/assets/chess_pieces/white-queen.png";
+import whiteKing from "@/assets/chess_pieces/white-king.png";
+import blackPawn from "@/assets/chess_pieces/black-pawn.png";
+import blackKnight from "@/assets/chess_pieces/black-knight.png";
+import blackBishop from "@/assets/chess_pieces/black-bishop.png";
+import blackRook from "@/assets/chess_pieces/black-rook.png";
+import blackQueen from "@/assets/chess_pieces/black-queen.png";
+import blackKing from "@/assets/chess_pieces/black-king.png";
 
 type PieceType = "pawn" | "rook" | "knight" | "bishop" | "queen" | "king";
 type PieceColor = "white" | "black";
@@ -53,25 +65,6 @@ type BoardMatrix = (Piece | null)[][];
 const BOARD_SIZE = 8;
 const router = useRouter();
 
-const pieceGlyphs: Record<PieceColor, Record<PieceType, string>> = {
-  white: {
-    pawn: "♙",
-    rook: "♖",
-    knight: "♘",
-    bishop: "♗",
-    queen: "♕",
-    king: "♔",
-  },
-  black: {
-    pawn: "♟",
-    rook: "♜",
-    knight: "♞",
-    bishop: "♝",
-    queen: "♛",
-    king: "♚",
-  },
-};
-
 const pieceValues: Record<PieceType, number> = {
   pawn: 100,
   knight: 320,
@@ -79,6 +72,25 @@ const pieceValues: Record<PieceType, number> = {
   rook: 500,
   queen: 900,
   king: 10000,
+};
+
+const pieceImages: Record<PieceColor, Record<PieceType, string>> = {
+  white: {
+    pawn: whitePawn,
+    rook: whiteRook,
+    knight: whiteKnight,
+    bishop: whiteBishop,
+    queen: whiteQueen,
+    king: whiteKing,
+  },
+  black: {
+    pawn: blackPawn,
+    rook: blackRook,
+    knight: blackKnight,
+    bishop: blackBishop,
+    queen: blackQueen,
+    king: blackKing,
+  },
 };
 
 const randomId = () =>
@@ -794,7 +806,13 @@ const aiMove = (preparedMoves: LegalMove[]) => {
               ]"
               @click="handleSquareClick(rowIndex, colIndex)"
             >
-              <span v-if="cell" class="piece" :class="cell.color">{{ pieceGlyphs[cell.color][cell.type] }}</span>
+              <img
+                v-if="cell"
+                class="piece-img"
+                :class="cell.color"
+                :src="pieceImages[cell.color][cell.type]"
+                :alt="`${cell.color} ${cell.type}`"
+              />
               <span
                 v-if="highlightedLookup[`${rowIndex}-${colIndex}`]"
                 class="move-dot"
@@ -978,6 +996,8 @@ const aiMove = (preparedMoves: LegalMove[]) => {
 .board-grid {
   display: grid;
   grid-template-columns: repeat(8, minmax(0, 1fr));
+  width: min(90vh, 100%);
+  max-height: 90vh;
   border-radius: 1rem;
   overflow: hidden;
   border: 1px solid rgba(15, 23, 42, 0.8);
@@ -991,7 +1011,6 @@ const aiMove = (preparedMoves: LegalMove[]) => {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.9rem;
   cursor: pointer;
   transition: transform 0.1s ease;
 }
@@ -1013,17 +1032,23 @@ const aiMove = (preparedMoves: LegalMove[]) => {
   outline: 2px solid rgba(147, 197, 253, 0.4);
 }
 
-.piece {
-  font-size: 2.1rem;
-  text-shadow: 0 2px 6px rgba(15, 23, 42, 0.6);
+.piece-img {
+  width: 72%;
+  height: 72%;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 6px rgba(15, 23, 42, 0.6));
 }
 
-.piece.white {
-  color: #fde047;
+.piece-img.white {
+  filter:
+    drop-shadow(0 2px 6px rgba(15, 23, 42, 0.6))
+    drop-shadow(0 0 4px rgba(253, 224, 71, 0.35));
 }
 
-.piece.black {
-  color: #f8fafc;
+.piece-img.black {
+  filter:
+    drop-shadow(0 2px 6px rgba(15, 23, 42, 0.6))
+    drop-shadow(0 0 4px rgba(248, 250, 252, 0.35));
 }
 
 .move-dot {
