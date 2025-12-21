@@ -15,6 +15,8 @@ import blackBishop from "@/assets/chess_pieces/black-bishop.png";
 import blackRook from "@/assets/chess_pieces/black-rook.png";
 import blackQueen from "@/assets/chess_pieces/black-queen.png";
 import blackKing from "@/assets/chess_pieces/black-king.png";
+import grassTexture from "@/assets/texture-grass-field.jpg";
+import groundTexture from "@/assets/photo-ground-texture-pattern.jpg";
 
 type PieceType = "pawn" | "rook" | "knight" | "bishop" | "queen" | "king";
 type PieceColor = "white" | "black";
@@ -131,12 +133,17 @@ const castlingRights = ref<CastlingRights>(defaultCastlingRights());
 const selectedSquare = ref<Square | null>(null);
 const highlightedMoves = ref<LegalMove[]>([]);
 const moveHistory = ref<string[]>([]);
+const lastMove = ref<{ from: Square; to: Square } | null>(null);
+const activeMoveAnimation = ref<{ id: string; dx: number; dy: number; duration: number } | null>(null);
+const captureOverlay = ref<{ src: string; row: number; col: number } | null>(null);
 const gameMessage = ref("Dwarven tacticians await your opening.");
 const currentTurn = ref<PieceColor>("white");
 const aiThinking = ref(false);
 const gameOver = ref(false);
 const winner = ref<PieceColor | "draw" | null>(null);
 const aiTimer = ref<number | null>(null);
+let moveAnimTimer: number | null = null;
+let captureTimer: number | null = null;
 
 const highlightedLookup = computed<Record<string, LegalMove>>(() => {
   const map: Record<string, LegalMove> = {};
@@ -144,6 +151,30 @@ const highlightedLookup = computed<Record<string, LegalMove>>(() => {
     map[`${move.to.row}-${move.to.col}`] = move;
   });
   return map;
+});
+
+const lastMoveArrow = computed(() => {
+  if (!lastMove.value) return null;
+  const scale = 100 / BOARD_SIZE;
+  const { from, to } = lastMove.value;
+  const x1 = (from.col + 0.5) * scale;
+  const y1 = (from.row + 0.5) * scale;
+  const x2 = (to.col + 0.5) * scale;
+  const y2 = (to.row + 0.5) * scale;
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const length = Math.hypot(dx, dy) || 1;
+  const trim = 3;
+  const headLength = 4;
+  const shaftLength = Math.max(0, length - headLength - trim);
+  const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
+  return {
+    x: x1,
+    y: y1,
+    angle,
+    shaftLength,
+    headLength,
+  };
 });
 
 const kingPositions = computed(() => {
@@ -172,7 +203,8 @@ const findKingSquare = (boardMatrix: BoardMatrix, color: PieceColor): Square | n
 
 const capitalize = (color: PieceColor) => (color === "white" ? "White" : "Black");
 const oppositeColor = (color: PieceColor): PieceColor => (color === "white" ? "black" : "white");
-const squareToNotation = (square: Square) => `${String.fromCharCode(97 + square.col)}${BOARD_SIZE - square.row}`;
+const squareToNotation = (square: Square) =>
+  `${String.fromCharCode(97 + square.col).toUpperCase()}${BOARD_SIZE - square.row}`;
 
 const setCastlingRights = (rights: CastlingRights) => {
   castlingRights.value = { ...rights };
@@ -185,14 +217,68 @@ const resetAiTimer = () => {
   }
 };
 
+const clearLogs = () => {
+  moveHistory.value = [];
+  lastMove.value = null;
+};
+
+const clearMoveAnimation = () => {
+  if (moveAnimTimer) {
+    window.clearTimeout(moveAnimTimer);
+    moveAnimTimer = null;
+  }
+  activeMoveAnimation.value = null;
+};
+
+const clearCaptureOverlay = () => {
+  if (captureTimer) {
+    window.clearTimeout(captureTimer);
+    captureTimer = null;
+  }
+  captureOverlay.value = null;
+};
+
+const triggerMoveAnimation = (move: Move) => {
+  clearMoveAnimation();
+  clearCaptureOverlay();
+  const dx = move.from.col - move.to.col;
+  const dy = move.from.row - move.to.row;
+  const tiles = Math.max(Math.abs(dx), Math.abs(dy)) || 1;
+  const duration = tiles * 500; // 0.5s per tile for clearer sliding
+  activeMoveAnimation.value = {
+    id: move.piece.id,
+    dx,
+    dy,
+    duration,
+  };
+  moveAnimTimer = window.setTimeout(() => {
+    activeMoveAnimation.value = null;
+    moveAnimTimer = null;
+  }, duration + 50);
+
+  const capturedPiece = move.captured;
+  const captureSquare = move.enPassantCapture ?? move.to;
+  if (capturedPiece) {
+    const src = pieceImages[capturedPiece.color][capturedPiece.type];
+    captureOverlay.value = { src, row: captureSquare.row, col: captureSquare.col };
+    const vanishDelay = Math.max(0, duration - 500);
+    captureTimer = window.setTimeout(() => {
+      captureOverlay.value = null;
+      captureTimer = null;
+    }, vanishDelay);
+  }
+};
+
 const resetGame = () => {
   resetAiTimer();
+  clearMoveAnimation();
+  clearCaptureOverlay();
   board.value = createInitialBoard();
   enPassantTarget.value = null;
   setCastlingRights(defaultCastlingRights());
   selectedSquare.value = null;
   highlightedMoves.value = [];
-  moveHistory.value = [];
+  clearLogs();
   gameMessage.value = "Dwarven tacticians await your opening.";
   currentTurn.value = "white";
   aiThinking.value = false;
@@ -202,6 +288,12 @@ const resetGame = () => {
 
 onBeforeUnmount(() => {
   resetAiTimer();
+  if (moveAnimTimer) {
+    window.clearTimeout(moveAnimTimer);
+  }
+  if (captureTimer) {
+    window.clearTimeout(captureTimer);
+  }
 });
 
 const isInside = (row: number, col: number) => row >= 0 && col >= 0 && row < BOARD_SIZE && col < BOARD_SIZE;
@@ -577,13 +669,20 @@ const generateLegalMovesForColor = (color: PieceColor): LegalMove[] => {
 };
 
 const describeMove = (move: Move) => {
+  const pieceNames: Record<PieceType, string> = {
+    pawn: "Pawn",
+    knight: "Knight",
+    bishop: "Bishop",
+    rook: "Rook",
+    queen: "Queen",
+    king: "King",
+  };
   if (move.castleRookFrom) {
-    return move.to.col === 6 ? "O-O" : "O-O-O";
+    return move.to.col === 6 ? "Kingside castle" : "Queenside castle";
   }
-  const pieceLetter = move.piece.type === "pawn" ? "" : move.piece.type[0].toUpperCase();
-  const captureMarker = move.captured || move.enPassantCapture ? "x" : "-";
-  const promotion = move.promotion ? `=${move.promotion[0].toUpperCase()}` : "";
-  return `${pieceLetter || "P"}${squareToNotation(move.from)}${captureMarker}${squareToNotation(move.to)}${promotion}`;
+  const captureTag = move.captured || move.enPassantCapture ? " (capture)" : "";
+  const promotion = move.promotion ? `, promotes to ${pieceNames[move.promotion]}` : "";
+  return `${pieceNames[move.piece.type]} ${squareToNotation(move.from)} -> ${squareToNotation(move.to)}${captureTag}${promotion}`;
 };
 
 const applyOutcome = (outcome: AppliedState) => {
@@ -594,7 +693,8 @@ const applyOutcome = (outcome: AppliedState) => {
 
 const recordMove = (move: Move) => {
   const text = `${capitalize(move.piece.color)}: ${describeMove(move)}`;
-  moveHistory.value = [text, ...moveHistory.value].slice(0, 20);
+  lastMove.value = { from: { ...move.from }, to: { ...move.to } };
+  moveHistory.value = [text, ...moveHistory.value];
 };
 
 const assessBoardState = (
@@ -620,7 +720,7 @@ const assessBoardState = (
     ? `${capitalize(nextTurn)} is in check!`
     : nextTurn === "white"
       ? "Your move. Hold the line."
-      : "Black is plotting...";
+      : "Greenskins are plotting...";
   return { finished: false, moves };
 };
 
@@ -656,6 +756,8 @@ const handleSquareClick = (row: number, col: number) => {
 };
 
 const executePlayerMove = (move: LegalMove) => {
+  if (activeMoveAnimation.value) return;
+  triggerMoveAnimation(move);
   applyOutcome(move.outcome);
   recordMove(move);
   if (checkKingCaptureVictory()) return;
@@ -705,7 +807,11 @@ const queueAiTurn = (preparedMoves: LegalMove[]) => {
   aiThinking.value = true;
   resetAiTimer();
   aiTimer.value = window.setTimeout(() => {
-    aiMove(preparedMoves);
+    if (activeMoveAnimation.value) {
+      moveAnimTimer = window.setTimeout(() => aiMove(preparedMoves), activeMoveAnimation.value.duration);
+    } else {
+      aiMove(preparedMoves);
+    }
   }, 600);
 };
 
@@ -730,14 +836,23 @@ const aiMove = (preparedMoves: LegalMove[]) => {
     }
   });
 
-  applyOutcome(bestMove.outcome);
-  recordMove(bestMove);
-  if (checkKingCaptureVictory()) return;
-  currentTurn.value = "white";
-  aiThinking.value = false;
-  const assessment = assessBoardState("white");
-  if (!assessment.finished) {
-    gameMessage.value = "Your move. Outsmart the automaton.";
+  const finishMove = () => {
+    triggerMoveAnimation(bestMove);
+    applyOutcome(bestMove.outcome);
+    recordMove(bestMove);
+    if (checkKingCaptureVictory()) return;
+    currentTurn.value = "white";
+    aiThinking.value = false;
+    const assessment = assessBoardState("white");
+    if (!assessment.finished) {
+      gameMessage.value = "Your move. Outsmart the greenskins.";
+    }
+  };
+
+  if (activeMoveAnimation.value) {
+    moveAnimTimer = window.setTimeout(finishMove, activeMoveAnimation.value.duration);
+  } else {
+    finishMove();
   }
 };
 </script>
@@ -745,114 +860,146 @@ const aiMove = (preparedMoves: LegalMove[]) => {
 <template>
   <div class="tactics-page">
     <header class="top-bar">
-      <button type="button" class="back-button" @click="router.push('/')">
-        <ArrowLeft class="icon" />
-        Back
-      </button>
       <div class="title-cluster">
         <Castle class="icon" />
         <div>
-          <p class="eyebrow">New Scenario</p>
-          <h1>Dwarven Tactics</h1>
+          <h1 class="title-main">Dwarven Tactics</h1>
         </div>
       </div>
-      <button type="button" class="secondary-button" @click="resetGame">
-        <RotateCcw class="icon" />
-        Reset Match
-      </button>
+      <div class="top-actions">
+        <button type="button" class="back-button" @click="router.push('/')">
+          <ArrowLeft class="icon" />
+          Back
+        </button>
+        <button type="button" class="secondary-button" @click="resetGame">
+          <RotateCcw class="icon" />
+          Reset Match
+        </button>
+      </div>
     </header>
 
     <section class="hero">
       <div>
-        <p class="eyebrow">White vs. Machine</p>
+        <p class="eyebrow">Dwarves vs. Greenskins</p>
         <p class="intro">
-          Command the white host across 64 squares. Every piece obeys classic chess doctrine—win by checkmating the black automaton mind.
-        </p>
-      </div>
-      <div class="status-card">
-        <div class="status-line">
-          <Brain class="icon" />
-          <span>{{ aiThinking ? "Black is thinking..." : gameOver ? "Final verdict" : "Black ready" }}</span>
-        </div>
-        <div class="status-message">
-          {{ gameMessage }}
-        </div>
-        <p v-if="winner" class="status-sub">
-          Result: {{ winner === 'draw' ? 'Stalemate' : `${capitalize(winner)} victory` }}
+          Command the Dwarven host agains the greenskin onslaught. Every piece obeys classic chess rules—win by defeating the orkish boss.
         </p>
       </div>
     </section>
 
     <div class="playfield">
       <section class="board-panel">
-        <header class="panel-header">
-          <div>
-            <p class="eyebrow">Battlefield</p>
-            <h2>Stone-table Chessboard</h2>
-          </div>
-          <p class="panel-sub">White to move: {{ currentTurn === 'white' ? 'Yes' : 'No' }}</p>
-        </header>
-        <div class="board-grid">
-          <template v-for="(row, rowIndex) in board" :key="`row-${rowIndex}`">
-            <button
-              v-for="(cell, colIndex) in row"
-              :key="`${rowIndex}-${colIndex}`"
-              type="button"
-              class="board-square"
-              :class="[
-                (rowIndex + colIndex) % 2 === 0 ? 'light' : 'dark',
-                { selected: selectedSquare && selectedSquare.row === rowIndex && selectedSquare.col === colIndex },
-                { targetable: highlightedLookup[`${rowIndex}-${colIndex}`] },
-              ]"
-              @click="handleSquareClick(rowIndex, colIndex)"
+          <div class="board-wrapper">
+            <div
+              v-if="captureOverlay"
+              class="capture-overlay"
+              :style="{
+                '--capture-top': `${((captureOverlay.row + 0.5) / BOARD_SIZE) * 100}%`,
+                '--capture-left': `${((captureOverlay.col + 0.5) / BOARD_SIZE) * 100}%`,
+              }"
             >
-              <img
-                v-if="cell"
-                class="piece-img"
-                :class="cell.color"
-                :src="pieceImages[cell.color][cell.type]"
-                :alt="`${cell.color} ${cell.type}`"
+              <img :src="captureOverlay.src" alt="captured piece" />
+            </div>
+            <svg
+              v-if="lastMoveArrow"
+              class="last-move-layer"
+              viewBox="0 0 100 100"
+              preserveAspectRatio="none"
+          >
+            <g
+              :transform="`translate(${lastMoveArrow.x}, ${lastMoveArrow.y}) rotate(${lastMoveArrow.angle})`"
+              fill="rgba(255, 224, 138, 0.55)"
+            >
+              <rect
+                x="0"
+                :y="-(0.7)"
+                :width="lastMoveArrow.shaftLength"
+                height="1.4"
+                rx="0"
               />
-              <span
-                v-if="highlightedLookup[`${rowIndex}-${colIndex}`]"
-                class="move-dot"
-                :class="{ capture: highlightedLookup[`${rowIndex}-${colIndex}`]?.captured || highlightedLookup[`${rowIndex}-${colIndex}`]?.enPassantCapture }"
+              <polygon
+                :points="`
+                  ${lastMoveArrow.shaftLength},-2
+                  ${lastMoveArrow.shaftLength + lastMoveArrow.headLength},0
+                  ${lastMoveArrow.shaftLength},2
+                `"
               />
-              <span class="coordinate" v-if="colIndex === 0">{{ BOARD_SIZE - rowIndex }}</span>
-              <span class="coordinate file" v-if="rowIndex === BOARD_SIZE - 1">{{ String.fromCharCode(97 + colIndex) }}</span>
-            </button>
-          </template>
+            </g>
+          </svg>
+
+          <div class="board-grid">
+            <template v-for="(row, rowIndex) in board" :key="`row-${rowIndex}`">
+              <button
+                v-for="(cell, colIndex) in row"
+                :key="`${rowIndex}-${colIndex}`"
+                type="button"
+                class="board-square"
+                :class="[
+                  (rowIndex + colIndex) % 2 === 0 ? 'light' : 'dark',
+                  { selected: selectedSquare && selectedSquare.row === rowIndex && selectedSquare.col === colIndex },
+                  { targetable: highlightedLookup[`${rowIndex}-${colIndex}`] },
+                ]"
+                :style="{
+                  backgroundImage: `url(${
+                    (rowIndex + colIndex) % 2 === 0 ? grassTexture : groundTexture
+                  })`,
+                  backgroundColor: (rowIndex + colIndex) % 2 === 0 ? '#5f7f4a' : '#5a4a36',
+                  backgroundSize: 'cover',
+                  backgroundPosition: 'center',
+                  backgroundRepeat: 'no-repeat',
+                }"
+                @click="handleSquareClick(rowIndex, colIndex)"
+              >
+                <img
+                  v-if="cell"
+                  class="piece-img"
+                  :class="[
+                    cell.color,
+                    { animating: activeMoveAnimation && activeMoveAnimation.id === cell.id },
+                  ]"
+                  :src="pieceImages[cell.color][cell.type]"
+                  :alt="`${cell.color} ${cell.type}`"
+                :style="activeMoveAnimation && activeMoveAnimation.id === cell.id
+                    ? {
+                        '--move-x-percent': `${activeMoveAnimation.dx * 139}%`,
+                        '--move-y-percent': `${activeMoveAnimation.dy * 139}%`,
+                        '--move-duration': `${activeMoveAnimation.duration}ms`,
+                      }
+                    : undefined"
+                />
+                <span
+                  v-if="highlightedLookup[`${rowIndex}-${colIndex}`]"
+                  class="move-dot"
+                  :class="{ capture: highlightedLookup[`${rowIndex}-${colIndex}`]?.captured || highlightedLookup[`${rowIndex}-${colIndex}`]?.enPassantCapture }"
+                />
+                <span class="coordinate rank-left" v-if="colIndex === 0">{{ BOARD_SIZE - rowIndex }}</span>
+                <span class="coordinate rank-right" v-if="colIndex === BOARD_SIZE - 1">{{ BOARD_SIZE - rowIndex }}</span>
+                <span class="coordinate file-top" v-if="rowIndex === 0">{{ String.fromCharCode(65 + colIndex) }}</span>
+                <span class="coordinate file" v-if="rowIndex === BOARD_SIZE - 1">{{ String.fromCharCode(65 + colIndex) }}</span>
+              </button>
+            </template>
+          </div>
         </div>
       </section>
 
       <aside class="info-panel">
-        <section class="panel">
-          <div class="panel-header">
-            <h3>Current Front</h3>
-            <p class="panel-sub">
-              {{ currentTurn === 'white' ? 'White planning...' : aiThinking ? 'Black computing...' : 'Black ready' }}
-            </p>
+        <div class="status-card">
+          <div class="status-line">
+            <Brain class="icon" />
+            <span>{{ aiThinking ? "Black is thinking..." : gameOver ? "Final verdict" : "Awaiting move" }}</span>
           </div>
-          <ul class="status-list">
-            <li>
-              <span class="label">White King</span>
-              <span class="value">{{ kingPositions.white ? squareToNotation(kingPositions.white) : 'captured' }}</span>
-            </li>
-            <li>
-              <span class="label">Black King</span>
-              <span class="value">{{ kingPositions.black ? squareToNotation(kingPositions.black) : 'captured' }}</span>
-            </li>
-            <li>
-              <span class="label">En passant</span>
-              <span class="value">{{ enPassantTarget ? squareToNotation(enPassantTarget) : '—' }}</span>
-            </li>
-          </ul>
-        </section>
+          <div class="status-message">
+            {{ gameMessage }}
+          </div>
+          <p v-if="winner" class="status-sub">
+            Result: {{ winner === 'draw' ? 'Stalemate' : `${capitalize(winner)} victory` }}
+          </p>
+        </div>
 
         <section class="panel log-panel">
           <div class="panel-header">
             <h3>Move Log</h3>
-            <p class="panel-sub">Latest 20 turns</p>
+            <p class="panel-sub">All moves (latest first)</p>
           </div>
           <ul class="log-list">
             <li v-if="!moveHistory.length" class="empty">No moves recorded yet.</li>
@@ -877,10 +1024,8 @@ const aiMove = (preparedMoves: LegalMove[]) => {
 
 .top-bar {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
+  flex-direction: column;
   gap: 1rem;
-  flex-wrap: wrap;
 }
 
 .icon {
@@ -911,11 +1056,42 @@ const aiMove = (preparedMoves: LegalMove[]) => {
   gap: 0.75rem;
 }
 
+.title-main {
+  font-size: 2.4rem;
+  line-height: 1.1;
+}
+
+.title-cluster .icon {
+  width: 2.4rem;
+  height: 2.4rem;
+}
+
 .eyebrow {
   font-size: 0.65rem;
   letter-spacing: 0.35em;
   text-transform: uppercase;
   color: rgba(148, 163, 184, 0.85);
+}
+
+.top-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+@media (min-width: 768px) {
+  .top-bar {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+  }
+
+  .top-actions {
+    width: auto;
+    justify-content: flex-end;
+  }
 }
 
 .hero {
@@ -996,11 +1172,49 @@ const aiMove = (preparedMoves: LegalMove[]) => {
 .board-grid {
   display: grid;
   grid-template-columns: repeat(8, minmax(0, 1fr));
-  width: min(90vh, 100%);
-  max-height: 90vh;
+  width: 100%;
+  position: relative;
+  z-index: 1;
   border-radius: 1rem;
   overflow: hidden;
   border: 1px solid rgba(15, 23, 42, 0.8);
+}
+
+.board-wrapper {
+  position: relative;
+  width: min(90vh, 100%);
+  max-height: 90vh;
+  margin: 0 auto;
+}
+
+.capture-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.capture-overlay img {
+  position: absolute;
+  top: var(--capture-top);
+  left: var(--capture-left);
+  transform: translate(-50%, -50%);
+  width: calc(100% / 8 * 0.72);
+  height: calc(100% / 8 * 0.72);
+  object-fit: contain;
+  filter:
+    drop-shadow(0 2px 6px rgba(15, 23, 42, 0.6))
+    drop-shadow(0 0 4px rgba(248, 250, 252, 0.35));
+}
+
+.last-move-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+  filter:
+    drop-shadow(0 0 6px rgba(255, 224, 138, 0.35))
+    drop-shadow(0 0 10px rgba(255, 224, 138, 0.25));
 }
 
 .board-square {
@@ -1036,7 +1250,17 @@ const aiMove = (preparedMoves: LegalMove[]) => {
   width: 72%;
   height: 72%;
   object-fit: contain;
+  will-change: transform;
+  transform-origin: center;
   filter: drop-shadow(0 2px 6px rgba(15, 23, 42, 0.6));
+  transform: translate(0, 0);
+}
+
+.piece-img.animating {
+  animation: piece-slide var(--move-duration, 500ms) ease-in-out forwards;
+  animation-fill-mode: both;
+  position: relative;
+  z-index: 3;
 }
 
 .piece-img.white {
@@ -1056,29 +1280,74 @@ const aiMove = (preparedMoves: LegalMove[]) => {
   width: 0.6rem;
   height: 0.6rem;
   border-radius: 999px;
-  background: rgba(16, 185, 129, 0.85);
+  background: rgba(220, 38, 38, 0.9);
 }
 
 .move-dot.capture {
   width: 80%;
   height: 80%;
-  border: 3px solid rgba(248, 113, 113, 0.85);
+  border: 3px solid rgba(220, 38, 38, 0.9);
   background: transparent;
 }
 
 .coordinate {
   position: absolute;
-  font-size: 0.6rem;
-  color: rgba(15, 23, 42, 0.6);
-  left: 0.2rem;
-  top: 0.2rem;
+  font-size: 1.2rem;
+  color: #f8fafc;
+  font-weight: 700;
+  text-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.6),
+    0 0 6px rgba(0, 0, 0, 0.35);
 }
 
-.coordinate.file {
-  left: auto;
-  right: 0.2rem;
+.file-top {
+  left: 50%;
+  transform: translateX(-50%);
+  top: 0.3rem;
+  bottom: auto;
+  pointer-events: none;
+}
+
+.file {
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 0.3rem;
   top: auto;
-  bottom: 0.2rem;
+  pointer-events: none;
+}
+
+.rank-left {
+  left: 0.4rem;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.rank-right {
+  right: 0.4rem;
+  left: auto;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.board-square.dark .coordinate {
+  color: #f8fafc;
+  text-shadow:
+    0 1px 3px rgba(15, 23, 42, 0.7),
+    0 0 6px rgba(0, 0, 0, 0.45);
+}
+
+@keyframes piece-slide {
+  from {
+    transform: translate(
+      var(--move-x-percent, 0),
+      var(--move-y-percent, 0)
+    );
+  }
+  to {
+    transform: translate(0, 0);
+  }
 }
 
 .info-panel {
