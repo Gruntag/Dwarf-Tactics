@@ -646,6 +646,7 @@ const handleSquareClick = (row: number, col: number) => {
 const executePlayerMove = (move: LegalMove) => {
   applyOutcome(move.outcome);
   recordMove(move);
+  if (checkKingCaptureVictory()) return;
   selectedSquare.value = null;
   highlightedMoves.value = [];
   currentTurn.value = "black";
@@ -666,6 +667,26 @@ const evaluateBoard = (boardMatrix: BoardMatrix) => {
     }
   }
   return score;
+};
+
+const checkKingCaptureVictory = () => {
+  const whiteAlive = !!findKingSquare(board.value, "white");
+  const blackAlive = !!findKingSquare(board.value, "black");
+  if (whiteAlive && blackAlive) return false;
+  gameOver.value = true;
+  if (whiteAlive && !blackAlive) {
+    winner.value = "white";
+    gameMessage.value = "White wins by capturing the black king.";
+  } else if (!whiteAlive && blackAlive) {
+    winner.value = "black";
+    gameMessage.value = "Black wins by capturing the white king.";
+  } else {
+    winner.value = "draw";
+    gameMessage.value = "Both kings fall. The war ends in ashes.";
+  }
+  aiThinking.value = false;
+  resetAiTimer();
+  return true;
 };
 
 const queueAiTurn = (preparedMoves: LegalMove[]) => {
@@ -699,6 +720,7 @@ const aiMove = (preparedMoves: LegalMove[]) => {
 
   applyOutcome(bestMove.outcome);
   recordMove(bestMove);
+  if (checkKingCaptureVictory()) return;
   currentTurn.value = "white";
   aiThinking.value = false;
   const assessment = assessBoardState("white");

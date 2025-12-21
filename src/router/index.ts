@@ -49,9 +49,9 @@ const router = createRouter({
       component: () => import("@/pages/SkullCrusher.vue"),
     },
     {
-      path: "/dragon-fire",
-      name: "dragon-fire",
-      component: () => import("@/pages/DragonFire.vue"),
+      path: "/minecart-extraction",
+      name: "minecart-extraction",
+      component: () => import("@/pages/MinecartExtraction.vue"),
     },
     {
       path: "/loot-train",

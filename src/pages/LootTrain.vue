@@ -1,654 +1,978 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
-import { ArrowLeft, Crown, Flame, HeartPulse, LayoutGrid, Sparkles, Timer, Train, Trophy } from "lucide-vue-next";
 import { addResource, getResourceCount, RESOURCES } from "@/lib/resources";
 import { toast } from "@/composables/useToast";
+import { ArrowLeft, Award, Compass, Heart, Map as MapIcon, Repeat2, Train, Zap } from "lucide-vue-next";
 
-type Phase = "ready" | "running" | "victory" | "defeat";
-type DirectionKey = "up" | "down" | "left" | "right";
+type NodeType = "start" | "loot" | "camp" | "vault";
+type CardRarity = "common" | "uncommon" | "rare";
+type CardFocus = "train" | "grun" | "balanced";
 
-interface Position {
-  x: number;
-  y: number;
-}
-
-interface FloatingMessage {
+interface TrackNode {
   id: string;
-  text: string;
-  life: number;
-  maxLife: number;
-  position: Position;
+  column: number;
+  row: number;
+  type: NodeType;
+  visited: boolean;
+  resolved: boolean;
+  connections: string[];
 }
 
-const BOARD_COLS = 20;
-const BOARD_ROWS = 18;
-const CELL_SIZE = 32;
-const BASE_TICK_MS = 220;
-const SPEED_MIN_MS = 90;
-const LOOT_TARGET = 22;
+interface StepBonuses {
+  costReduction?: number;
+  gritGain?: number;
+  cargoGain?: number;
+  speedGain?: number;
+  luckGain?: number;
+  resourceBonus?: number;
+}
+
+interface InstantBonuses {
+  grit?: number;
+  gritMax?: number;
+  cargo?: number;
+}
+
+interface CardDefinition {
+  key: string;
+  name: string;
+  rarity: CardRarity;
+  focus: CardFocus;
+  description: string;
+  step: StepBonuses;
+  instant?: InstantBonuses;
+}
 
 const router = useRouter();
+const lootResource = RESOURCES.lootTrain;
+const lootCount = ref(getResourceCount("lootTrain"));
 
-const phase = ref<Phase>("ready");
-const LOOT_RESOURCE_KEY = "lootTrain" as const;
-const lootResource = RESOURCES[LOOT_RESOURCE_KEY];
-const cargoCrates = ref(getResourceCount(LOOT_RESOURCE_KEY));
+const TRACK_COLUMNS = 15;
+const NODES_PER_COLUMN = 5;
+const TRACK_ROWS = 9;
+const BASE_STEP_COST = 2;
 
-const snake = ref<Position[]>([]);
-const direction = ref<Position>({ x: 1, y: 0 });
-const queuedDirection = ref<Position>({ x: 1, y: 0 });
-const lootCart = ref<Position>({ x: 5, y: 5 });
-const lootCollected = ref(0);
-const distanceTravelled = ref(0);
-const crashPosition = ref<Position | null>(null);
+const nodes = ref<TrackNode[]>([]);
+const currentNodeId = ref<string | null>(null);
+const travelSteps = ref(0);
+const visitedNodes = ref(1);
+const travelLog = ref<string[]>([]);
+const availableChoices = ref<CardDefinition[] | null>(null);
+const restNodeId = ref<string | null>(null);
+const runPhase = ref<"map" | "victory" | "defeat">("map");
+const defeatReason = ref("Exhausted in the tunnels.");
 
-const floatingMessages = reactive<FloatingMessage[]>([]);
+const runStats = reactive({
+  grit: 28,
+  maxGrit: 28,
+  cargo: 0,
+  speed: 1,
+  luck: 0,
+});
 
-const tickRateMs = computed(() =>
-  Math.max(SPEED_MIN_MS, BASE_TICK_MS - lootCollected.value * 6)
-);
+const collectedCards = ref<CardDefinition[]>([]);
+const sealProgress = ref(0);
 
-const boardStyle = computed(() => ({
-  width: `${BOARD_COLS * CELL_SIZE}px`,
-  height: `${BOARD_ROWS * CELL_SIZE}px`,
-}));
+const CARD_LIBRARY: CardDefinition[] = [
+  {
+    key: "mithril-brakes",
+    name: "Mithril Brakes",
+    rarity: "common",
+    focus: "train",
+    description: "Step bonus: -1 grit travel cost (min 1).",
+    step: { costReduction: 1 },
+  },
+  {
+    key: "vault-ale",
+    name: "Vault Ale",
+    rarity: "common",
+    focus: "grun",
+    description: "Step bonus: +2 grit after traveling.",
+    step: { gritGain: 2 },
+  },
+  {
+    key: "cargo-net",
+    name: "Cargo Net",
+    rarity: "common",
+    focus: "train",
+    description: "Step bonus: +1 cargo.",
+    step: { cargoGain: 1 },
+  },
+  {
+    key: "glimmer-lantern",
+    name: "Glimmer Lantern",
+    rarity: "common",
+    focus: "balanced",
+    description: "Step bonus: +1 luck.",
+    step: { luckGain: 1 },
+  },
+  {
+    key: "thrumming-rails",
+    name: "Thrumming Rails",
+    rarity: "uncommon",
+    focus: "train",
+    description: "Step bonus: +1 speed and +1 cargo.",
+    step: { speedGain: 1, cargoGain: 1 },
+  },
+  {
+    key: "heartforge-pulse",
+    name: "Heartforge Pulse",
+    rarity: "uncommon",
+    focus: "grun",
+    description: "Step bonus: +3 grit, +1 max grit immediately.",
+    step: { gritGain: 3 },
+    instant: { gritMax: 1, grit: 1 },
+  },
+  {
+    key: "starlode",
+    name: "Starlode Cache",
+    rarity: "uncommon",
+    focus: "balanced",
+    description: "Step bonus: +1 cargo and +1 luck.",
+    step: { cargoGain: 1, luckGain: 1 },
+  },
+  {
+    key: "river-of-sparks",
+    name: "River of Sparks",
+    rarity: "rare",
+    focus: "train",
+    description: "Step bonus: -2 grit cost, +2 speed.",
+    step: { costReduction: 2, speedGain: 2 },
+  },
+  {
+    key: "grim-determination",
+    name: "Grim Determination",
+    rarity: "rare",
+    focus: "grun",
+    description: "Step bonus: +4 grit. Immediately +3 max grit.",
+    step: { gritGain: 4 },
+    instant: { gritMax: 3, grit: 3 },
+  },
+  {
+    key: "vault-ledger",
+    name: "Vault Ledger",
+    rarity: "rare",
+    focus: "balanced",
+    description: "Step bonus: +1 cargo, +1 luck, +1 loot seal progress.",
+    step: { cargoGain: 1, luckGain: 1, resourceBonus: 1 },
+  },
+  {
+    key: "slag-chains",
+    name: "Slag Chains",
+    rarity: "common",
+    focus: "train",
+    description: "Step bonus: +2 cargo, -1 grit cost.",
+    step: { cargoGain: 2, costReduction: 1 },
+  },
+  {
+    key: "ember-rations",
+    name: "Ember Rations",
+    rarity: "common",
+    focus: "grun",
+    description: "Step bonus: +1 grit, +1 luck.",
+    step: { gritGain: 1, luckGain: 1 },
+  },
+];
 
-const snakeHead = computed(() => snake.value[0]);
-const trainLength = computed(() => snake.value.length);
-const progressPercent = computed(() =>
-  Math.min(100, Math.round((lootCollected.value / LOOT_TARGET) * 100))
-);
+const CARD_LOOKUP = CARD_LIBRARY.reduce<Record<string, CardDefinition>>((map, card) => {
+  map[card.key] = card;
+  return map;
+}, {});
 
-let tickTimer: number | null = null;
-let animationFrame: number | null = null;
-let lastSpawnId = 0;
-let pointGranted = false;
+const currentNode = computed(() => nodes.value.find((node) => node.id === currentNodeId.value) ?? null);
 
-const goHome = () => {
-  router.push("/");
-};
-
-const randomId = () =>
-  typeof crypto !== "undefined" && crypto.randomUUID
-    ? crypto.randomUUID()
-    : `id-${Math.random().toString(16).slice(2)}`;
-
-const spawnFloatingMessage = (text: string, position: Position) => {
-  floatingMessages.push({
-    id: randomId(),
-    text,
-    life: 900,
-    maxLife: 900,
-    position,
-  });
-};
-
-const popFloatingMessage = (id: string) => {
-  const index = floatingMessages.findIndex((item) => item.id === id);
-  if (index !== -1) {
-    floatingMessages.splice(index, 1);
-  }
-};
-
-const clearTimers = () => {
-  if (tickTimer !== null) {
-    window.clearInterval(tickTimer);
-    tickTimer = null;
-  }
-  if (animationFrame !== null) {
-    cancelAnimationFrame(animationFrame);
-    animationFrame = null;
-  }
-};
-
-const isOccupied = (position: Position) =>
-  snake.value.some((segment) => segment.x === position.x && segment.y === position.y);
-
-const randomEmptyCell = (): Position => {
-  const freeCells: Position[] = [];
-  for (let y = 0; y < BOARD_ROWS; y += 1) {
-    for (let x = 0; x < BOARD_COLS; x += 1) {
-      if (!isOccupied({ x, y })) {
-        freeCells.push({ x, y });
-      }
-    }
-  }
-  if (!freeCells.length) {
-    return { x: 0, y: 0 };
-  }
-  return freeCells[Math.floor(Math.random() * freeCells.length)];
-};
-
-const resetState = () => {
-  clearTimers();
-  phase.value = "ready";
-  snake.value = [
-    { x: Math.floor(BOARD_COLS / 2), y: Math.floor(BOARD_ROWS / 2) },
-    { x: Math.floor(BOARD_COLS / 2) - 1, y: Math.floor(BOARD_ROWS / 2) },
-    { x: Math.floor(BOARD_COLS / 2) - 2, y: Math.floor(BOARD_ROWS / 2) },
-  ];
-  direction.value = { x: 1, y: 0 };
-  queuedDirection.value = { x: 1, y: 0 };
-  lootCollected.value = 0;
-  distanceTravelled.value = 0;
-  crashPosition.value = null;
-  floatingMessages.splice(0, floatingMessages.length);
-  lootCart.value = randomEmptyCell();
-  pointGranted = false;
-};
-
-const setDirection = (dir: DirectionKey) => {
-  const nextDirection: Record<DirectionKey, Position> = {
-    up: { x: 0, y: -1 },
-    down: { x: 0, y: 1 },
-    left: { x: -1, y: 0 },
-    right: { x: 1, y: 0 },
-  };
-  const target = nextDirection[dir];
-  const current = direction.value;
-  if (current.x === -target.x && current.y === -target.y) {
-    return;
-  }
-  queuedDirection.value = target;
-};
-
-const handleKeydown = (event: KeyboardEvent) => {
-  if (phase.value !== "running") return;
-  switch (event.key.toLowerCase()) {
-    case "arrowup":
-    case "w":
-      setDirection("up");
-      break;
-    case "arrowdown":
-    case "s":
-      setDirection("down");
-      break;
-    case "arrowleft":
-    case "a":
-      setDirection("left");
-      break;
-    case "arrowright":
-    case "d":
-      setDirection("right");
-      break;
-    default:
-      break;
-  }
-};
-
-const endGame = (result: Phase) => {
-  clearTimers();
-  phase.value = result;
-  if (result === "victory") {
-    toast({
-      title: "Loot Train Complete",
-      description: "Gruntag delivers every cart safely.",
-      variant: "success",
+const nodePositions = computed(() => {
+  const map = new Map<string, { x: number; y: number }>();
+  const columnStep = TRACK_COLUMNS > 1 ? 100 / (TRACK_COLUMNS - 1) : 0;
+  const rowStep = TRACK_ROWS > 1 ? 100 / (TRACK_ROWS - 1) : 0;
+  nodes.value.forEach((node) => {
+    map.set(node.id, {
+      x: node.column * columnStep,
+      y: node.row * rowStep,
     });
-  } else if (result === "defeat") {
+  });
+  return map;
+});
+
+const connectionLines = computed(() =>
+  nodes.value.flatMap((node) => {
+    const start = nodePositions.value.get(node.id);
+    if (!start) return [];
+    return node.connections
+      .filter((targetId) => node.id.localeCompare(targetId) < 0)
+      .map((targetId) => {
+        const end = nodePositions.value.get(targetId);
+        if (!end) return null;
+        return {
+          id: `${node.id}-${targetId}`,
+          x1: start.x,
+          y1: start.y,
+          x2: end.x,
+          y2: end.y,
+        };
+      })
+      .filter(Boolean) as Array<{ id: string; x1: number; y1: number; x2: number; y2: number }>;
+  }),
+);
+
+const stepBonuses = computed(() =>
+  collectedCards.value.reduce(
+    (acc, card) => {
+      acc.costReduction += card.step.costReduction ?? 0;
+      acc.gritGain += card.step.gritGain ?? 0;
+      acc.cargoGain += card.step.cargoGain ?? 0;
+      acc.speedGain += card.step.speedGain ?? 0;
+      acc.luckGain += card.step.luckGain ?? 0;
+      acc.resourceBonus += card.step.resourceBonus ?? 0;
+      return acc;
+    },
+    { costReduction: 0, gritGain: 0, cargoGain: 0, speedGain: 0, luckGain: 0, resourceBonus: 0 },
+  ),
+);
+
+const nextStepCost = computed(() => Math.max(1, BASE_STEP_COST + travelSteps.value - stepBonuses.value.costReduction));
+
+const reachableNodes = computed(() => {
+  const curr = currentNode.value;
+  if (!curr) return new Set<string>();
+  return new Set(curr.connections);
+});
+
+const generateNode = (column: number, row: number, type: NodeType): TrackNode => ({
+  id: crypto.randomUUID(),
+  column,
+  row,
+  type,
+  visited: column === 0,
+  resolved: column === 0,
+  connections: [],
+});
+
+const pickNodeType = () => (Math.random() < 0.2 ? "camp" : "loot");
+
+const shuffle = <T>(list: T[]) => {
+  for (let i = list.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [list[i], list[j]] = [list[j], list[i]];
+  }
+  return list;
+};
+
+const buildGraph = () => {
+  const columns: TrackNode[][] = [];
+  const start = generateNode(0, Math.floor(TRACK_ROWS / 2), "start");
+  columns.push([start]);
+
+  for (let column = 1; column < TRACK_COLUMNS - 1; column += 1) {
+    const columnNodes: TrackNode[] = [];
+    for (let i = 0; i < NODES_PER_COLUMN; i += 1) {
+      const jitter = Math.random() * 0.6;
+      const row = Math.max(
+        0,
+        Math.min(TRACK_ROWS - 1, Math.round(((i + jitter) / (NODES_PER_COLUMN - 1)) * (TRACK_ROWS - 1))),
+      );
+      columnNodes.push(generateNode(column, row, pickNodeType()));
+    }
+    columns.push(columnNodes);
+  }
+
+  const vault = generateNode(TRACK_COLUMNS - 1, Math.floor(TRACK_ROWS / 2), "vault");
+  columns.push([vault]);
+
+  for (let c = 0; c < columns.length - 1; c += 1) {
+    const currentColumn = columns[c];
+    const nextColumn = columns[c + 1];
+    currentColumn.forEach((node) => {
+      const candidates = nextColumn.filter((target) => Math.abs(target.row - node.row) <= 2);
+      const links = shuffle(candidates.length ? [...candidates] : [...nextColumn]).slice(0, 3);
+      links.forEach((target) => {
+        if (!node.connections.includes(target.id)) node.connections.push(target.id);
+        if (!target.connections.includes(node.id)) target.connections.push(node.id);
+      });
+    });
+  }
+
+  nodes.value = columns.flat();
+  currentNodeId.value = start.id;
+};
+
+const logStep = (message: string) => {
+  travelLog.value = [message, ...travelLog.value].slice(0, 12);
+};
+
+const presentCardDraft = () => {
+  const picks: CardDefinition[] = [];
+  while (picks.length < 3) {
+    const card = CARD_LIBRARY[Math.floor(Math.random() * CARD_LIBRARY.length)];
+    picks.push(card);
+  }
+  availableChoices.value = picks;
+};
+
+const applyInstantBonuses = (card: CardDefinition) => {
+  if (!card.instant) return;
+  if (card.instant.gritMax) {
+    runStats.maxGrit += card.instant.gritMax;
+    runStats.grit += card.instant.gritMax;
+  }
+  if (card.instant.grit) {
+    runStats.grit = Math.min(runStats.maxGrit, runStats.grit + card.instant.grit);
+  }
+  if (card.instant.cargo) {
+    runStats.cargo += card.instant.cargo;
+  }
+};
+
+const applyStepBonuses = () => {
+  const bonuses = stepBonuses.value;
+  if (bonuses.gritGain) {
+    runStats.grit = Math.min(runStats.maxGrit, runStats.grit + bonuses.gritGain);
+  }
+  if (bonuses.cargoGain) {
+    runStats.cargo += bonuses.cargoGain;
+  }
+  if (bonuses.speedGain) {
+    runStats.speed += bonuses.speedGain;
+  }
+  if (bonuses.luckGain) {
+    runStats.luck += bonuses.luckGain;
+  }
+  if (bonuses.resourceBonus) {
+    sealProgress.value += bonuses.resourceBonus;
+  }
+};
+
+const resolveNode = (node: TrackNode) => {
+  if (node.type === "camp") {
+    restNodeId.value = node.id;
+  } else if (node.type === "vault") {
+    presentCardDraft();
+  } else {
+    presentCardDraft();
+  }
+};
+
+const completeVault = () => {
+  runPhase.value = "victory";
+  lootCount.value = addResource("lootTrain");
+};
+
+const moveToNode = (node: TrackNode) => {
+  if (!reachableNodes.value.has(node.id)) return;
+  const cost = nextStepCost.value;
+  const forcedStep = runStats.grit < cost;
+  if (forcedStep) {
     toast({
-      title: "Train Derailed",
-      description: "Gruntag's loot spills across the tracks.",
+      title: "Grit exhausted",
+      description: "Gruntag pushes onward anyway, but the convoy will fail after this move.",
       variant: "destructive",
     });
   }
-};
-
-const advanceSnake = () => {
-  if (phase.value !== "running") return;
-  direction.value = { ...queuedDirection.value };
-  const head = snake.value[0];
-  const nextHead: Position = {
-    x: head.x + direction.value.x,
-    y: head.y + direction.value.y,
-  };
-
-  // wall collision
-  if (
-    nextHead.x < 0 ||
-    nextHead.x >= BOARD_COLS ||
-    nextHead.y < 0 ||
-    nextHead.y >= BOARD_ROWS
-  ) {
-    crashPosition.value = nextHead;
-    endGame("defeat");
-    return;
+  runStats.grit -= cost;
+  travelSteps.value += 1;
+  applyStepBonuses();
+  currentNodeId.value = node.id;
+  if (!node.visited) {
+    node.visited = true;
+    visitedNodes.value += 1;
   }
-
-  // self collision
-  if (snake.value.some((segment) => segment.x === nextHead.x && segment.y === nextHead.y)) {
-    crashPosition.value = nextHead;
-    endGame("defeat");
-    return;
+  logStep(`Moved to ${node.type.toUpperCase()} • Cost ${cost} grit`);
+  if (!node.resolved) {
+    resolveNode(node);
   }
-
-  distanceTravelled.value += 1;
-
-  const newSnake = [{ ...nextHead }, ...snake.value];
-  const lootHit = nextHead.x === lootCart.value.x && nextHead.y === lootCart.value.y;
-
-  if (lootHit) {
-    lootCollected.value += 1;
-    spawnFloatingMessage("Car Linked!", nextHead);
-    lootCart.value = randomEmptyCell();
-  } else {
-    newSnake.pop();
-  }
-
-  snake.value = newSnake;
-
-  if (lootCollected.value >= LOOT_TARGET) {
-    endGame("victory");
+  if (runStats.grit < 0 || forcedStep) {
+    triggerDefeat("Gruntag collapses after forcing the convoy forward.");
   }
 };
 
-const updateFloatingMessages = (deltaMs: number) => {
-  for (let index = floatingMessages.length - 1; index >= 0; index -= 1) {
-    const item = floatingMessages[index];
-    item.life -= deltaMs;
-    if (item.life <= 0) {
-      floatingMessages.splice(index, 1);
+const handleNodeClick = (node: TrackNode) => {
+  if (node.type === "start") return;
+  if (!reachableNodes.value.has(node.id)) return;
+  moveToNode(node);
+};
+
+const pickCard = (key: string) => {
+  const card = CARD_LOOKUP[key];
+  if (!card) return;
+  collectedCards.value.push(card);
+  applyInstantBonuses(card);
+  availableChoices.value = null;
+  const node = currentNode.value;
+  if (node) {
+    node.resolved = true;
+    if (node.type === "vault") {
+      completeVault();
     }
   }
 };
 
-const animate = (timestamp: number) => {
-  if (phase.value !== "running") return;
-  if (!lastSpawnId) {
-    lastSpawnId = timestamp;
+const restAtCamp = (action: "grit" | "max" | "luck") => {
+  if (!restNodeId.value) return;
+  if (action === "grit") {
+    runStats.grit = Math.min(runStats.maxGrit, runStats.grit + 10);
+    logStep("Camped: +10 grit.");
+  } else if (action === "max") {
+    runStats.maxGrit += 2;
+    runStats.grit += 2;
+    logStep("Camped: +2 max grit.");
+  } else if (action === "luck") {
+    runStats.luck += 2;
+    logStep("Camped: +2 luck.");
   }
-  const delta = timestamp - lastSpawnId;
-  lastSpawnId = timestamp;
-  updateFloatingMessages(delta);
-  animationFrame = requestAnimationFrame(animate);
+  restNodeId.value = null;
+  const node = currentNode.value;
+  if (node && !node.resolved) {
+    presentCardDraft();
+  }
 };
 
-const scheduleTick = () => {
-  clearTimers();
-  lastSpawnId = 0;
-  tickTimer = window.setInterval(advanceSnake, tickRateMs.value);
-  animationFrame = requestAnimationFrame(animate);
+const triggerDefeat = (reason: string) => {
+  defeatReason.value = reason;
+  runPhase.value = "defeat";
+  availableChoices.value = null;
+  restNodeId.value = null;
 };
 
-const startGame = () => {
-  resetState();
-  phase.value = "running";
-  scheduleTick();
-  spawnFloatingMessage("All aboard!", snake.value[0]);
+const resetRun = () => {
+  nodes.value = [];
+  collectedCards.value = [];
+  availableChoices.value = null;
+  restNodeId.value = null;
+  runPhase.value = "map";
+  travelSteps.value = 0;
+  visitedNodes.value = 1;
+  travelLog.value = ["Convoy assembled at the outer station."];
+  runStats.grit = 28;
+  runStats.maxGrit = 28;
+  runStats.cargo = 0;
+  runStats.speed = 1;
+  runStats.luck = 0;
+  sealProgress.value = 0;
+  buildGraph();
 };
-
-watch(
-  () => lootCollected.value,
-  () => {
-    if (phase.value === "running") {
-      scheduleTick();
-    }
-  }
-);
-
-watch(
-  () => phase.value,
-  (next) => {
-    if (next === "running") {
-      cargoCrates.value = getResourceCount(LOOT_RESOURCE_KEY);
-    }
-    if (next === "victory" && !pointGranted) {
-      cargoCrates.value = addResource(LOOT_RESOURCE_KEY);
-      pointGranted = true;
-    }
-  }
-);
 
 onMounted(() => {
-  resetState();
-  window.addEventListener("keydown", handleKeydown);
-});
-
-onBeforeUnmount(() => {
-  window.removeEventListener("keydown", handleKeydown);
-  clearTimers();
-});
-
-const backButtonClasses =
-  "group inline-flex items-center gap-2 rounded-md border border-border bg-card/70 px-4 py-2 text-sm font-semibold text-foreground transition hover:bg-card focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-primary";
-
-const actionButtonClasses =
-  "inline-flex items-center justify-center gap-2 rounded-md bg-gradient-to-r from-primary via-accent to-primary px-6 py-2 text-sm font-semibold text-primary-foreground shadow-lg transition hover:from-primary/90 hover:via-accent/90 hover:to-primary/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-accent";
-
-const overlayTitle = computed(() => {
-  switch (phase.value) {
-    case "victory":
-      return "Legendary Delivery";
-    case "defeat":
-      return "Train Derailed";
-    default:
-      return "Loot Train";
-  }
-});
-
-const overlayDescription = computed(() => {
-  switch (phase.value) {
-    case "victory":
-      return "Every cart of treasure reaches the vault. Gruntag is pleased.";
-    case "defeat":
-      return "The cars scatter across the cavern floor. Gather yourself and try again.";
-    default:
-      return "Guide Gruntag's loot train through the tunnels. Gather treasure carts, avoid crashing into the cavern walls or yourself, and collect 22 carts to claim victory.";
-  }
-});
-
-const overlayAction = computed(() => {
-  switch (phase.value) {
-    case "victory":
-      return "Run the Train Again";
-    case "defeat":
-      return "Rebuild the Train";
-    default:
-      return "Start the Heist";
-  }
+  resetRun();
 });
 </script>
 
 <template>
-  <div class="relative min-h-screen overflow-hidden bg-slate-950 py-10">
-    <div class="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.15),_transparent_60%)]" />
-    <div class="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_bottom,_rgba(251,191,36,0.12),_transparent_55%)]" />
-
-    <main class="relative z-10 mx-auto flex w-full max-w-6xl flex-col gap-8 px-4 lg:flex-row">
-      <div class="flex-1 space-y-6">
-        <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <button type="button" :class="backButtonClasses" @click="goHome">
-            <ArrowLeft class="h-4 w-4 transition-transform group-hover:-translate-x-0.5" />
-            Return
-          </button>
-
-          <div class="flex items-center gap-2 rounded-lg border border-primary/30 bg-card/80 px-4 py-2 text-sm text-foreground backdrop-blur">
-            <Trophy class="h-5 w-5 text-accent" />
-            <div class="flex flex-col leading-tight text-right">
-              <span class="text-[10px] uppercase tracking-widest text-muted-foreground">{{ lootResource.plural }}</span>
-              <span class="text-lg font-semibold text-foreground">{{ cargoCrates }}</span>
-            </div>
-          </div>
+  <div class="loot-page">
+    <header class="top-bar">
+      <button type="button" class="back-button" @click="router.push('/')">
+        <ArrowLeft class="icon" />
+        Back
+      </button>
+      <div class="title-cluster">
+        <Train class="icon" />
+        <div>
+          <p class="eyebrow">Final Expedition</p>
+          <h1>Loot Train</h1>
         </div>
-
-        <section class="relative overflow-hidden rounded-3xl border border-primary/15 bg-slate-900/70 shadow-[0_20px_60px_rgba(15,23,42,0.55)] backdrop-blur">
-          <div class="absolute inset-0 bg-[radial-gradient(circle_at_center,_rgba(59,130,246,0.12),_transparent_65%)]" />
-          <div class="relative px-6 py-6">
-            <header class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p class="text-xs font-semibold uppercase tracking-[0.3em] text-primary/70">
-                  Loot Train
-                </p>
-                <h1 class="mt-1 text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
-                  Cavern Rail Run
-                </h1>
-              </div>
-              <div class="text-sm text-muted-foreground sm:max-w-md">
-                <p>
-                  Snake the rails through Gruntag's vaults. Link treasure carts, keep the train intact, and don't collide with your own loot.
-                </p>
-              </div>
-            </header>
-
-            <div class="mt-6 flex flex-col gap-6 lg:flex-row">
-              <div class="flex-1">
-                <div class="rounded-2xl border border-border/60 bg-slate-950/60 p-5">
-                  <div class="flex flex-wrap items-center gap-4 text-sm text-muted-foreground">
-                    <div class="flex items-center gap-2">
-                      <Train class="h-4 w-4 text-emerald-400" />
-                      Cars Linked {{ lootCollected }} / {{ LOOT_TARGET }}
-                    </div>
-                    <div class="flex items-center gap-2">
-                      <LayoutGrid class="h-4 w-4 text-sky-400" />
-                      Train Length {{ trainLength }}
-                    </div>
-                    <div class="flex items-center gap-2">
-                      <Timer class="h-4 w-4 text-amber-300" />
-                      Pace {{ tickRateMs }} ms
-                    </div>
-                    <div class="flex items-center gap-2">
-                      <Flame class="h-4 w-4 text-rose-400" />
-                      Distance {{ distanceTravelled }}
-                    </div>
-                  </div>
-
-                  <div class="mt-4 h-2 w-full overflow-hidden rounded-full bg-slate-800/80">
-                    <div
-                      class="h-full rounded-full bg-gradient-to-r from-emerald-400 via-emerald-500 to-sky-500 transition-all duration-300"
-                      :style="{ width: `${progressPercent}%` }"
-                    />
-                  </div>
-                </div>
-
-                <div class="mt-5 flex justify-center">
-                  <div class="board relative overflow-hidden rounded-3xl border border-border/50 bg-slate-900/80 shadow-[0_20px_50px_rgba(15,23,42,0.45)]" :style="boardStyle">
-                    <div class="absolute inset-0 bg-[radial-gradient(circle_at_center,_rgba(59,130,246,0.08),_transparent_70%)]" />
-                    <div class="absolute inset-0 bg-[linear-gradient(to_right,rgba(30,41,59,0.28)_1px,transparent_1px),linear-gradient(to_bottom,rgba(30,41,59,0.28)_1px,transparent_1px)]" :style="{ backgroundSize: `${CELL_SIZE}px ${CELL_SIZE}px` }" />
-
-                    <div
-                      v-for="(segment, index) in snake"
-                      :key="`segment-${index}`"
-                      :class="['train-segment', index === 0 ? 'head' : 'cart']"
-                      :style="{
-                        width: `${CELL_SIZE}px`,
-                        height: `${CELL_SIZE}px`,
-                        transform: `translate(${segment.x * CELL_SIZE}px, ${segment.y * CELL_SIZE}px)`,
-                      }"
-                    >
-                      <Sparkles v-if="index === 0" class="h-4 w-4 text-amber-200" />
-                      <span v-else class="cart-icon" />
-                    </div>
-
-                    <div
-                      class="loot-cart"
-                      :style="{
-                        width: `${CELL_SIZE - 6}px`,
-                        height: `${CELL_SIZE - 6}px`,
-                        transform: `translate(${lootCart.x * CELL_SIZE + 3}px, ${lootCart.y * CELL_SIZE + 3}px)`,
-                      }"
-                    />
-
-                    <div
-                      v-if="crashPosition"
-                      class="crash-marker"
-                      :style="{
-                        width: `${CELL_SIZE}px`,
-                        height: `${CELL_SIZE}px`,
-                        transform: `translate(${crashPosition.x * CELL_SIZE}px, ${crashPosition.y * CELL_SIZE}px)`,
-                      }"
-                    />
-
-                    <div
-                      v-for="message in floatingMessages"
-                      :key="message.id"
-                      class="floating-message"
-                      :style="{
-                        transform: `translate(${message.position.x * CELL_SIZE}px, ${message.position.y * CELL_SIZE}px)`,
-                        opacity: Math.max(0, message.life / message.maxLife),
-                      }"
-                    >
-                      {{ message.text }}
-                    </div>
-
-                    <div
-                      v-if="phase !== 'running'"
-                      class="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/85 backdrop-blur-sm"
-                    >
-                      <div class="flex max-w-sm flex-col items-center gap-4 rounded-2xl border border-primary/30 bg-slate-900/85 px-8 py-10 text-center shadow-[0_24px_60px_rgba(14,23,42,0.6)]">
-                        <Train class="h-8 w-8 text-accent" />
-                        <h2 class="text-2xl font-bold text-foreground">
-                          {{ overlayTitle }}
-                        </h2>
-                        <p class="text-sm text-muted-foreground">
-                          {{ overlayDescription }}
-                        </p>
-                        <button type="button" :class="actionButtonClasses" @click="startGame">
-                          {{ overlayAction }}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <aside class="w-full max-w-sm space-y-4">
-                <div class="rounded-2xl border border-border/60 bg-slate-950/60 p-5">
-                  <h3 class="text-sm font-semibold uppercase tracking-[0.22em] text-muted-foreground">
-                    Controls
-                  </h3>
-                  <ul class="mt-3 space-y-2 text-sm text-muted-foreground">
-                    <li>Use arrow keys or WASD to steer Gruntag through the tunnels.</li>
-                    <li>Every loot cart adds a car to the train and increases the speed.</li>
-                    <li>Colliding with the cavern wall or your own carts ends the run.</li>
-                  </ul>
-                </div>
-
-                <div class="rounded-2xl border border-border/60 bg-slate-950/60 p-5">
-                  <h3 class="text-sm font-semibold uppercase tracking-[0.22em] text-muted-foreground">
-                    Rail Strategies
-                  </h3>
-                  <ul class="mt-3 space-y-2 text-sm text-muted-foreground">
-                    <li>Keep a wide loop so the train has room for sudden turns.</li>
-                    <li>Use the outer edges for travel and the center for pickups.</li>
-                    <li>Link 22 carts to complete the haul and earn a {{ lootResource.singular.toLowerCase() }}.</li>
-                  </ul>
-                </div>
-              </aside>
-            </div>
-          </div>
-        </section>
       </div>
+      <button type="button" class="secondary-button" @click="resetRun">
+        <Repeat2 class="icon" />
+        Reset Run
+      </button>
+    </header>
 
-      <aside class="w-full max-w-xs space-y-6">
-        <div class="rounded-3xl border border-primary/15 bg-slate-900/60 p-6 shadow-[0_18px_50px_rgba(15,23,42,0.45)] backdrop-blur">
-          <h3 class="text-lg font-semibold text-foreground">Train Metrics</h3>
-          <dl class="mt-4 space-y-3 text-sm text-muted-foreground">
-            <div class="flex items-center justify-between">
-              <dt class="flex items-center gap-2">
-                <Train class="h-4 w-4 text-emerald-400" />
-                Linked Carts
-              </dt>
-              <dd class="font-semibold text-foreground">{{ lootCollected }}</dd>
-            </div>
-            <div class="flex items-center justify-between">
-              <dt class="flex items-center gap-2">
-                <Crown class="h-4 w-4 text-amber-300" />
-                Train Length
-              </dt>
-              <dd class="font-semibold text-foreground">{{ trainLength }}</dd>
-            </div>
-            <div class="flex items-center justify-between">
-              <dt class="flex items-center gap-2">
-                <Timer class="h-4 w-4 text-amber-300" />
-                Tick Rate
-              </dt>
-              <dd class="font-semibold text-foreground">{{ tickRateMs }} ms</dd>
-            </div>
-            <div class="flex items-center justify-between">
-              <dt class="flex items-center gap-2">
-                <Flame class="h-4 w-4 text-rose-400" />
-                Distance
-              </dt>
-              <dd class="font-semibold text-foreground">{{ distanceTravelled }}</dd>
-            </div>
-            <div class="flex items-center justify-between">
-              <dt class="flex items-center gap-2">
-                <HeartPulse class="h-4 w-4 text-emerald-400" />
-                Status
-              </dt>
-              <dd class="font-semibold text-foreground">
-                {{ phase === "running" ? "Rolling" : phase === "victory" ? "Vaulted" : "Idle" }}
-              </dd>
-            </div>
-          </dl>
+    <section class="hero">
+      <div>
+        <p class="eyebrow">Deckbuilding Journey</p>
+        <p>
+          Guide Gruntag across a sprawling, non-linear tunnel map inspired by FTL. Every stop yields loot cards that
+          grant bonuses each time you travel. Manage your grit—each step costs more than the last.
+        </p>
+      </div>
+      <div class="resource-pill">
+        <Award class="icon" />
+        <div>
+          <p class="label">{{ lootResource.plural }}</p>
+          <p class="value">{{ lootCount }}</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="stats-row">
+      <div class="stat-card">
+        <Heart class="icon" />
+        <div>
+          <p class="label">Grit</p>
+          <p class="value">{{ runStats.grit }} / {{ runStats.maxGrit }}</p>
+          <p class="sub">Next step cost: {{ nextStepCost }}</p>
+        </div>
+      </div>
+      <div class="stat-card">
+        <Compass class="icon" />
+        <div>
+          <p class="label">Convoy Pace</p>
+          <p class="value">Speed {{ runStats.speed }}</p>
+          <p class="sub">Luck {{ runStats.luck }}</p>
+        </div>
+      </div>
+      <div class="stat-card">
+        <Zap class="icon" />
+        <div>
+          <p class="label">Cargo Tally</p>
+          <p class="value">{{ runStats.cargo }}</p>
+          <p class="sub">{{ collectedCards.length }} loot cards collected</p>
+        </div>
+      </div>
+    </section>
+
+    <div class="playfield">
+      <section class="map-panel">
+        <header class="panel-header">
+          <div>
+            <p class="eyebrow">Tunnel Cartography</p>
+            <h2>Choose Your Path</h2>
+          </div>
+          <MapIcon class="icon" />
+        </header>
+        <div class="map-canvas">
+          <svg class="map-lines" viewBox="0 0 100 100" preserveAspectRatio="none">
+            <line
+              v-for="edge in connectionLines"
+              :key="edge.id"
+              :x1="edge.x1"
+              :y1="edge.y1"
+              :x2="edge.x2"
+              :y2="edge.y2"
+            />
+          </svg>
+          <button
+            v-for="node in nodes"
+            :key="node.id"
+            type="button"
+            class="map-node"
+            :class="[
+              `type-${node.type}`,
+              { visited: node.visited, resolved: node.resolved, reachable: reachableNodes.has(node.id) },
+              { current: currentNode?.id === node.id },
+            ]"
+            :style="{
+              left: `${nodePositions.get(node.id)?.x ?? 0}%`,
+              top: `${nodePositions.get(node.id)?.y ?? 0}%`,
+            }"
+            @click="handleNodeClick(node)"
+          >
+            <span>{{ node.type === "vault" ? "✦" : node.type === "camp" ? "☕" : node.type === "loot" ? "◇" : "S" }}</span>
+          </button>
+        </div>
+        <p class="map-footnotes">
+          Steps taken: {{ travelSteps }} • Nodes visited: {{ visitedNodes }} / {{ nodes.length }}
+        </p>
+      </section>
+
+      <section class="journey-panel">
+        <header class="panel-header">
+          <div>
+            <p class="eyebrow">Journey Log</p>
+            <h2>Bonuses & Notes</h2>
+          </div>
+        </header>
+
+        <div class="bonus-summary">
+          <p class="summary-title">Step Bonuses</p>
+          <ul>
+            <li>-{{ stepBonuses.costReduction }} grit travel cost</li>
+            <li>+{{ stepBonuses.gritGain }} grit after moving</li>
+            <li>+{{ stepBonuses.cargoGain }} cargo • +{{ stepBonuses.speedGain }} speed</li>
+            <li>+{{ stepBonuses.luckGain }} luck • +{{ stepBonuses.resourceBonus }} seal progress</li>
+          </ul>
         </div>
 
-        <div class="rounded-3xl border border-primary/15 bg-slate-900/60 p-6 shadow-[0_18px_50px_rgba(15,23,42,0.45)] backdrop-blur">
-          <h3 class="text-lg font-semibold text-foreground">Victory Terms</h3>
-          <p class="mt-3 text-sm text-muted-foreground">
-            The train must haul <strong>22 carts</strong> without derailing. Each pickup accelerates the convoy, testing your reflexes. Keep Gruntag safe and the loot secure to earn a {{ lootResource.singular.toLowerCase() }}.
-          </p>
+        <div class="card-inventory">
+          <p class="summary-title">Collected Loot Cards</p>
+          <p v-if="!collectedCards.length" class="empty">Collect cards to power each step.</p>
+          <ul v-else>
+            <li v-for="(card, index) in collectedCards" :key="`${card.key}-${index}`">
+              <span class="card-name">{{ card.name }}</span>
+              <span class="card-meta">{{ card.rarity }} • {{ card.focus }}</span>
+            </li>
+          </ul>
         </div>
-      </aside>
-    </main>
+
+        <div class="log-panel">
+          <p class="summary-title">Recent Events</p>
+          <ul>
+            <li v-for="entry in travelLog" :key="entry">{{ entry }}</li>
+          </ul>
+        </div>
+      </section>
+    </div>
+
+    <div v-if="availableChoices" class="overlay">
+      <div class="overlay-card">
+        <header>
+          <h3>Choose New Loot</h3>
+          <p>Each card grants bonuses automatically every step.</p>
+        </header>
+        <div class="draft-grid">
+          <button
+            v-for="card in availableChoices"
+            :key="card.key"
+            type="button"
+            class="draft-card"
+            @click="pickCard(card.key)"
+          >
+            <p class="card-title">{{ card.name }} <span>{{ card.rarity }}</span></p>
+            <p class="card-body">{{ card.description }}</p>
+            <p class="card-tag">{{ card.focus }} focus</p>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="restNodeId" class="overlay">
+      <div class="overlay-card">
+        <header>
+          <h3>Campfire Choices</h3>
+          <p>Recover before continuing.</p>
+        </header>
+        <div class="rest-grid">
+          <button type="button" class="rest-button" @click="restAtCamp('grit')">
+            <Heart class="icon" /> +10 grit
+          </button>
+          <button type="button" class="rest-button" @click="restAtCamp('max')">
+            <Zap class="icon" /> +2 max grit
+          </button>
+          <button type="button" class="rest-button" @click="restAtCamp('luck')">
+            <Compass class="icon" /> +2 luck
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="runPhase === 'victory'" class="overlay">
+      <div class="overlay-card">
+        <header>
+          <h3>Vault Secured</h3>
+          <p>The loot train reaches the inner vault. A seal is awarded!</p>
+        </header>
+        <button type="button" class="secondary-button" @click="resetRun">Start New Run</button>
+      </div>
+    </div>
+
+    <div v-if="runPhase === 'defeat'" class="overlay">
+      <div class="overlay-card">
+        <header>
+          <h3>Convoy Lost</h3>
+          <p>{{ defeatReason }}</p>
+        </header>
+        <button type="button" class="secondary-button" @click="resetRun">Try Again</button>
+      </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.board {
-  position: relative;
-  border-radius: 24px;
-  overflow: hidden;
+.loot-page {
+  min-height: 100vh;
+  padding: 2.5rem 1.25rem 4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  color: #e2e8f0;
+  background: radial-gradient(circle at top, rgba(147, 197, 253, 0.3), transparent 65%), #030712;
 }
 
-.train-segment {
-  position: absolute;
+.top-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.icon {
+  width: 1rem;
+  height: 1rem;
+}
+
+.back-button,
+.secondary-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 1rem;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  background: rgba(15, 23, 42, 0.8);
+  color: inherit;
+  font-weight: 600;
+}
+
+.title-cluster {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.eyebrow {
+  font-size: 0.65rem;
+  letter-spacing: 0.35em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.85);
+}
+
+.hero {
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 1.25rem;
+  padding: 1.25rem;
+  background: rgba(2, 6, 23, 0.85);
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.resource-pill {
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 999px;
+  padding: 0.5rem 1.2rem;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.stats-row {
   display: grid;
-  place-items: center;
-  transition: transform 0.08s linear;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
 }
 
-.train-segment.head {
-  border-radius: 14px;
-  background: linear-gradient(145deg, rgba(251, 191, 36, 0.95), rgba(218, 119, 6, 0.9));
-  box-shadow:
-    0 10px 24px rgba(251, 191, 36, 0.35),
-    inset 0 -10px 16px rgba(124, 45, 18, 0.4);
-  border: 2px solid rgba(255, 228, 181, 0.6);
+.stat-card {
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 1rem;
+  background: rgba(1, 5, 15, 0.85);
+  padding: 0.9rem;
+  display: flex;
+  gap: 0.75rem;
 }
 
-.train-segment.cart {
-  border-radius: 12px;
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.8), rgba(29, 78, 216, 0.85));
-  box-shadow:
-    0 8px 18px rgba(37, 99, 235, 0.3),
-    inset 0 -8px 14px rgba(15, 23, 42, 0.55);
-  border: 1px solid rgba(191, 219, 254, 0.5);
-}
-
-.cart-icon {
-  height: 12px;
-  width: 18px;
-  border-radius: 4px;
-  background: linear-gradient(135deg, rgba(226, 232, 240, 0.85), rgba(148, 163, 184, 0.75));
-  box-shadow:
-    inset 0 -2px 4px rgba(71, 85, 105, 0.6),
-    0 0 8px rgba(226, 232, 240, 0.3);
-}
-
-.loot-cart {
-  position: absolute;
-  border-radius: 10px;
-  background: linear-gradient(145deg, rgba(251, 191, 36, 0.95), rgba(249, 115, 22, 0.8));
-  box-shadow:
-    0 12px 22px rgba(249, 115, 22, 0.4),
-    inset 0 -8px 14px rgba(124, 45, 18, 0.4);
-  border: 2px solid rgba(251, 191, 36, 0.6);
-  transition: transform 0.08s linear;
-}
-
-.crash-marker {
-  position: absolute;
-  border-radius: 14px;
-  border: 2px solid rgba(248, 113, 113, 0.7);
-  background: rgba(248, 113, 113, 0.35);
-  box-shadow:
-    0 0 24px rgba(248, 113, 113, 0.4),
-    inset 0 0 12px rgba(248, 113, 113, 0.6);
-}
-
-.floating-message {
-  position: absolute;
-  transform: translate(-10%, -40%);
+.label {
   font-size: 0.7rem;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.85);
+}
+
+.value {
+  font-size: 1.4rem;
   font-weight: 700;
+}
+
+.sub {
+  font-size: 0.85rem;
+  color: rgba(148, 163, 184, 0.8);
+}
+
+.playfield {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: 1.25rem;
+}
+
+.map-panel,
+.journey-panel {
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 1.25rem;
+  background: rgba(2, 6, 23, 0.85);
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.map-canvas {
+  position: relative;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 1.2rem;
+  min-height: 480px;
+  background: radial-gradient(circle at center, rgba(30, 41, 59, 0.8), rgba(15, 23, 42, 0.9));
+}
+
+.map-lines {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.map-lines line {
+  stroke: rgba(59, 130, 246, 0.35);
+  stroke-width: 1.5;
+}
+
+.map-node {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 2.6rem;
+  height: 2.6rem;
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background: rgba(2, 6, 23, 0.6);
+  color: #e2e8f0;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.map-node.type-loot {
+  background: rgba(34, 197, 94, 0.25);
+}
+
+.map-node.type-camp {
+  background: rgba(251, 191, 36, 0.25);
+}
+
+.map-node.type-vault {
+  background: rgba(248, 113, 113, 0.3);
+}
+
+.map-node.visited {
+  opacity: 0.65;
+  border-color: rgba(148, 163, 184, 0.4);
+}
+
+.map-node.current {
+  transform: translate(-50%, -50%) scale(1.15);
+  border-color: rgba(251, 191, 36, 0.9);
+  box-shadow: 0 0 12px rgba(251, 191, 36, 0.8);
+}
+
+.map-node.reachable {
+  border-color: rgba(56, 189, 248, 0.8);
+  cursor: pointer;
+}
+
+.map-footnotes {
+  font-size: 0.85rem;
+  color: rgba(148, 163, 184, 0.8);
+}
+
+.journey-panel .summary-title {
+  font-size: 0.85rem;
   letter-spacing: 0.2em;
   text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.8);
+}
+
+.bonus-summary ul,
+.card-inventory ul,
+.log-panel ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.card-inventory .empty {
+  font-size: 0.85rem;
+  color: rgba(148, 163, 184, 0.75);
+}
+
+.card-name {
+  font-weight: 600;
+}
+
+.card-meta {
+  font-size: 0.75rem;
+  color: rgba(148, 163, 184, 0.8);
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+}
+
+.log-panel ul li {
+  font-size: 0.85rem;
   color: rgba(226, 232, 240, 0.95);
-  text-shadow:
-    0 0 12px rgba(56, 189, 248, 0.6),
-    0 0 24px rgba(226, 232, 240, 0.6);
-  pointer-events: none;
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  z-index: 40;
+}
+
+.overlay-card {
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 1.5rem;
+  background: rgba(1, 5, 15, 0.95);
+  padding: 1.5rem;
+  width: min(900px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.draft-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.75rem;
+}
+
+.draft-card {
+  border: 1px solid rgba(248, 250, 252, 0.25);
+  border-radius: 0.9rem;
+  padding: 0.85rem;
+  text-align: left;
+  background: rgba(15, 23, 42, 0.8);
+  color: inherit;
+}
+
+.draft-card .card-title {
+  display: flex;
+  justify-content: space-between;
+  font-weight: 600;
+}
+
+.draft-card .card-tag {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: rgba(148, 163, 184, 0.75);
+}
+
+.rest-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.75rem;
+}
+
+.rest-button {
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  border-radius: 0.9rem;
+  padding: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: rgba(15, 23, 42, 0.6);
+}
+
+@media (max-width: 1024px) {
+  .playfield {
+    grid-template-columns: 1fr;
+  }
+  .map-canvas {
+    min-height: 360px;
+  }
 }
 </style>

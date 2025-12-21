@@ -13,12 +13,6 @@ export const RESOURCES = {
     plural: "Bastion Crests",
     summary: "Granted for holding the keep throughout Dwarven Defense.",
   },
-  forgeMaster: {
-    slug: "forge-master",
-    singular: "Forge Seal",
-    plural: "Forge Seals",
-    summary: "Granted for completing elite guild contracts in Forge Master.",
-  },
   trophyHunt: {
     slug: "trophy-hunt",
     singular: "Hunter Trophy",
@@ -38,16 +32,16 @@ export const RESOURCES = {
     summary: "Harvested by keeping the crusher roaring in Skull Crusher.",
   },
   dragonFire: {
-    slug: "dragon-fire",
-    singular: "Ember Shard",
-    plural: "Ember Shards",
-    summary: "Forged when the ward survives Dragon Fire.",
+    slug: "forge-master",
+    singular: "Forge Seal",
+    plural: "Forge Seals",
+    summary: "Earned when the furnaces are mastered in Forge Master.",
   },
   lootTrain: {
     slug: "loot-train",
-    singular: "Cargo Crate",
-    plural: "Cargo Crates",
-    summary: "Loaded for every flawless Loot Train haul.",
+    singular: "Extraction Crate",
+    plural: "Extraction Crates",
+    summary: "Loaded for every flawless Minecart Extraction haul.",
   },
   gemMiner: {
     slug: "gem-miner",
