@@ -1,12 +1,11 @@
 import { createRouter, createWebHistory } from "vue-router";
 
 const router = createRouter({
-  history: createWebHistory(),
+  history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     {
       path: "/",
-      name: "home",
-      component: () => import("@/pages/Index.vue"),
+      redirect: "/dwarven-tactics",
     },
     {
       path: "/mountain-king",

@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from "vue";
-import { useRouter } from "vue-router";
-import { ArrowLeft, Brain, Castle, RotateCcw } from "lucide-vue-next";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { Brain, Castle, RotateCcw } from "lucide-vue-next";
 import { toast } from "@/composables/useToast";
 import whitePawn from "@/assets/chess_pieces/white-pawn.png";
 import whiteKnight from "@/assets/chess_pieces/white-knight.png";
@@ -17,6 +16,7 @@ import blackQueen from "@/assets/chess_pieces/black-queen.png";
 import blackKing from "@/assets/chess_pieces/black-king.png";
 import grassTexture from "@/assets/texture-grass-field.jpg";
 import groundTexture from "@/assets/photo-ground-texture-pattern.jpg";
+import captureAnimation from "@/assets/fight2.gif";
 
 type PieceType = "pawn" | "rook" | "knight" | "bishop" | "queen" | "king";
 type PieceColor = "white" | "black";
@@ -65,8 +65,6 @@ interface LegalMove extends Move {
 type BoardMatrix = (Piece | null)[][];
 
 const BOARD_SIZE = 8;
-const router = useRouter();
-
 const pieceValues: Record<PieceType, number> = {
   pawn: 100,
   knight: 320,
@@ -105,7 +103,36 @@ const createPiece = (type: PieceType, color: PieceColor): Piece => ({
   hasMoved: false,
 });
 
-const createInitialBoard = (): BoardMatrix => {
+const removeQueen = (boardMatrix: BoardMatrix, color: PieceColor) => {
+  const row = color === "white" ? 7 : 0;
+  boardMatrix[row][3] = null;
+};
+
+const removeRook = (boardMatrix: BoardMatrix, color: PieceColor, side: "queen" | "king") => {
+  const row = color === "white" ? 7 : 0;
+  const col = side === "queen" ? 0 : 7;
+  boardMatrix[row][col] = null;
+};
+
+const applyHandicap = (boardMatrix: BoardMatrix, color: PieceColor, level: number) => {
+  if (level === 5) {
+    removeQueen(boardMatrix, color);
+    removeRook(boardMatrix, color, "queen");
+    removeRook(boardMatrix, color, "king");
+  } else if (level === 4) {
+    removeQueen(boardMatrix, color);
+    removeRook(boardMatrix, color, "queen");
+  } else if (level === 3) {
+    removeQueen(boardMatrix, color);
+  } else if (level === 2) {
+    removeRook(boardMatrix, color, "queen");
+    removeRook(boardMatrix, color, "king");
+  } else if (level === 1) {
+    removeRook(boardMatrix, color, "queen");
+  }
+};
+
+const createInitialBoard = (difficulty: number): BoardMatrix => {
   const board: BoardMatrix = Array.from({ length: BOARD_SIZE }, () => Array<Piece | null>(BOARD_SIZE).fill(null));
   const backRank: PieceType[] = ["rook", "knight", "bishop", "queen", "king", "bishop", "knight", "rook"];
   backRank.forEach((type, col) => {
@@ -114,28 +141,41 @@ const createInitialBoard = (): BoardMatrix => {
     board[6][col] = createPiece("pawn", "white");
     board[7][col] = createPiece(type, "white");
   });
+  if (difficulty < 0) {
+    applyHandicap(board, "black", Math.abs(difficulty));
+  } else if (difficulty > 0) {
+    applyHandicap(board, "white", difficulty);
+  }
   return board;
 };
 
 const cloneBoard = (board: BoardMatrix): BoardMatrix =>
   board.map((row) => row.map((piece) => (piece ? { ...piece } : null)));
 
-const defaultCastlingRights = (): CastlingRights => ({
-  whiteKingSide: true,
-  whiteQueenSide: true,
-  blackKingSide: true,
-  blackQueenSide: true,
-});
+const initialCastlingRights = (boardMatrix: BoardMatrix): CastlingRights => {
+  const whiteKing = boardMatrix[7]?.[4]?.type === "king" && boardMatrix[7]?.[4]?.color === "white";
+  const blackKing = boardMatrix[0]?.[4]?.type === "king" && boardMatrix[0]?.[4]?.color === "black";
+  return {
+    whiteKingSide: !!whiteKing && boardMatrix[7]?.[7]?.type === "rook" && boardMatrix[7]?.[7]?.color === "white",
+    whiteQueenSide: !!whiteKing && boardMatrix[7]?.[0]?.type === "rook" && boardMatrix[7]?.[0]?.color === "white",
+    blackKingSide: !!blackKing && boardMatrix[0]?.[7]?.type === "rook" && boardMatrix[0]?.[7]?.color === "black",
+    blackQueenSide: !!blackKing && boardMatrix[0]?.[0]?.type === "rook" && boardMatrix[0]?.[0]?.color === "black",
+  };
+};
 
-const board = ref<BoardMatrix>(createInitialBoard());
+const difficulty = ref(0);
+const difficultyLevels = Array.from({ length: 11 }, (_, index) => index - 5);
+
+const board = ref<BoardMatrix>(createInitialBoard(difficulty.value));
 const enPassantTarget = ref<Square | null>(null);
-const castlingRights = ref<CastlingRights>(defaultCastlingRights());
+const castlingRights = ref<CastlingRights>(initialCastlingRights(board.value));
 const selectedSquare = ref<Square | null>(null);
 const highlightedMoves = ref<LegalMove[]>([]);
 const moveHistory = ref<string[]>([]);
 const lastMove = ref<{ from: Square; to: Square } | null>(null);
 const activeMoveAnimation = ref<{ id: string; dx: number; dy: number; duration: number } | null>(null);
-const captureOverlay = ref<{ src: string; row: number; col: number } | null>(null);
+const captureOverlay = ref<{ id: string; row: number; col: number; durationMs: number } | null>(null);
+const lingeringCapture = ref<{ id: string; src: string; row: number; col: number } | null>(null);
 const gameMessage = ref("Dwarven tacticians await your opening.");
 const currentTurn = ref<PieceColor>("white");
 const aiThinking = ref(false);
@@ -143,7 +183,10 @@ const gameOver = ref(false);
 const winner = ref<PieceColor | "draw" | null>(null);
 const aiTimer = ref<number | null>(null);
 let moveAnimTimer: number | null = null;
-let captureTimer: number | null = null;
+let captureDelayTimer: number | null = null;
+let captureHideTimer: number | null = null;
+let lingerHideTimer: number | null = null;
+const CAPTURE_REVEAL_RATIO = 0.8;
 
 const highlightedLookup = computed<Record<string, LegalMove>>(() => {
   const map: Record<string, LegalMove> = {};
@@ -201,7 +244,7 @@ const findKingSquare = (boardMatrix: BoardMatrix, color: PieceColor): Square | n
   return null;
 };
 
-const capitalize = (color: PieceColor) => (color === "white" ? "White" : "Black");
+const capitalize = (color: PieceColor) => (color === "white" ? "Dwarf" : "Ork");
 const oppositeColor = (color: PieceColor): PieceColor => (color === "white" ? "black" : "white");
 const squareToNotation = (square: Square) =>
   `${String.fromCharCode(97 + square.col).toUpperCase()}${BOARD_SIZE - square.row}`;
@@ -231,16 +274,29 @@ const clearMoveAnimation = () => {
 };
 
 const clearCaptureOverlay = () => {
-  if (captureTimer) {
-    window.clearTimeout(captureTimer);
-    captureTimer = null;
+  if (captureDelayTimer) {
+    window.clearTimeout(captureDelayTimer);
+    captureDelayTimer = null;
+  }
+  if (captureHideTimer) {
+    window.clearTimeout(captureHideTimer);
+    captureHideTimer = null;
   }
   captureOverlay.value = null;
+};
+
+const clearLingeringCapture = () => {
+  if (lingerHideTimer) {
+    window.clearTimeout(lingerHideTimer);
+    lingerHideTimer = null;
+  }
+  lingeringCapture.value = null;
 };
 
 const triggerMoveAnimation = (move: Move) => {
   clearMoveAnimation();
   clearCaptureOverlay();
+  clearLingeringCapture();
   const dx = move.from.col - move.to.col;
   const dy = move.from.row - move.to.row;
   const tiles = Math.max(Math.abs(dx), Math.abs(dy)) || 1;
@@ -259,13 +315,29 @@ const triggerMoveAnimation = (move: Move) => {
   const capturedPiece = move.captured;
   const captureSquare = move.enPassantCapture ?? move.to;
   if (capturedPiece) {
+    const id = randomId();
     const src = pieceImages[capturedPiece.color][capturedPiece.type];
-    captureOverlay.value = { src, row: captureSquare.row, col: captureSquare.col };
-    const vanishDelay = Math.max(0, duration - 500);
-    captureTimer = window.setTimeout(() => {
-      captureOverlay.value = null;
-      captureTimer = null;
-    }, vanishDelay);
+    const revealDelay = Math.round(duration * CAPTURE_REVEAL_RATIO);
+    const overlayDuration = Math.max(300, (duration + 1200) / 2);
+    lingeringCapture.value = { id, src, row: captureSquare.row, col: captureSquare.col };
+    lingerHideTimer = window.setTimeout(() => {
+      if (lingeringCapture.value?.id === id) {
+        lingeringCapture.value = null;
+      }
+    }, revealDelay);
+    captureDelayTimer = window.setTimeout(() => {
+      captureOverlay.value = { id, row: captureSquare.row, col: captureSquare.col, durationMs: overlayDuration };
+      captureHideTimer = window.setTimeout(
+        () => handleCaptureEnded(id),
+        overlayDuration,
+      );
+    }, revealDelay);
+  }
+};
+
+const handleCaptureEnded = (id: string) => {
+  if (captureOverlay.value?.id === id) {
+    captureOverlay.value = null;
   }
 };
 
@@ -273,9 +345,10 @@ const resetGame = () => {
   resetAiTimer();
   clearMoveAnimation();
   clearCaptureOverlay();
-  board.value = createInitialBoard();
+  clearLingeringCapture();
+  board.value = createInitialBoard(difficulty.value);
   enPassantTarget.value = null;
-  setCastlingRights(defaultCastlingRights());
+  setCastlingRights(initialCastlingRights(board.value));
   selectedSquare.value = null;
   highlightedMoves.value = [];
   clearLogs();
@@ -286,14 +359,17 @@ const resetGame = () => {
   winner.value = null;
 };
 
+watch(difficulty, () => {
+  resetGame();
+});
+
 onBeforeUnmount(() => {
   resetAiTimer();
   if (moveAnimTimer) {
     window.clearTimeout(moveAnimTimer);
   }
-  if (captureTimer) {
-    window.clearTimeout(captureTimer);
-  }
+  clearCaptureOverlay();
+  clearLingeringCapture();
 });
 
 const isInside = (row: number, col: number) => row >= 0 && col >= 0 && row < BOARD_SIZE && col < BOARD_SIZE;
@@ -739,7 +815,7 @@ const handleSquareClick = (row: number, col: number) => {
     return;
   }
   if (piece.color !== "white") {
-    toast({ title: "Black piece", description: "Only the white host answers to you.", variant: "destructive" });
+    toast({ title: "Ork piece", description: "Only the dwarf host answers to you.", variant: "destructive" });
     return;
   }
   const snapshot = getStateSnapshot();
@@ -790,10 +866,10 @@ const checkKingCaptureVictory = () => {
   gameOver.value = true;
   if (whiteAlive && !blackAlive) {
     winner.value = "white";
-    gameMessage.value = "White wins by capturing the black king.";
+    gameMessage.value = "Dwarf wins by capturing the ork king.";
   } else if (!whiteAlive && blackAlive) {
     winner.value = "black";
-    gameMessage.value = "Black wins by capturing the white king.";
+    gameMessage.value = "Ork wins by capturing the dwarf king.";
   } else {
     winner.value = "draw";
     gameMessage.value = "Both kings fall. The war ends in ashes.";
@@ -867,10 +943,6 @@ const aiMove = (preparedMoves: LegalMove[]) => {
         </div>
       </div>
       <div class="top-actions">
-        <button type="button" class="back-button" @click="router.push('/')">
-          <ArrowLeft class="icon" />
-          Back
-        </button>
         <button type="button" class="secondary-button" @click="resetGame">
           <RotateCcw class="icon" />
           Reset Match
@@ -890,16 +962,6 @@ const aiMove = (preparedMoves: LegalMove[]) => {
     <div class="playfield">
       <section class="board-panel">
           <div class="board-wrapper">
-            <div
-              v-if="captureOverlay"
-              class="capture-overlay"
-              :style="{
-                '--capture-top': `${((captureOverlay.row + 0.5) / BOARD_SIZE) * 100}%`,
-                '--capture-left': `${((captureOverlay.col + 0.5) / BOARD_SIZE) * 100}%`,
-              }"
-            >
-              <img :src="captureOverlay.src" alt="captured piece" />
-            </div>
             <svg
               v-if="lastMoveArrow"
               class="last-move-layer"
@@ -951,6 +1013,12 @@ const aiMove = (preparedMoves: LegalMove[]) => {
                 @click="handleSquareClick(rowIndex, colIndex)"
               >
                 <img
+                  v-if="lingeringCapture && lingeringCapture.row === rowIndex && lingeringCapture.col === colIndex"
+                  class="lingering-capture"
+                  :src="lingeringCapture.src"
+                  alt="captured piece"
+                />
+                <img
                   v-if="cell"
                   class="piece-img"
                   :class="[
@@ -966,6 +1034,14 @@ const aiMove = (preparedMoves: LegalMove[]) => {
                         '--move-duration': `${activeMoveAnimation.duration}ms`,
                       }
                     : undefined"
+                />
+                <img
+                  v-if="captureOverlay && captureOverlay.row === rowIndex && captureOverlay.col === colIndex"
+                  :key="captureOverlay.id"
+                  class="capture-video"
+                  :src="captureAnimation"
+                  alt="capture animation"
+                  :style="{ '--capture-duration': `${captureOverlay.durationMs}ms` }"
                 />
                 <span
                   v-if="highlightedLookup[`${rowIndex}-${colIndex}`]"
@@ -983,10 +1059,28 @@ const aiMove = (preparedMoves: LegalMove[]) => {
       </section>
 
       <aside class="info-panel">
+        <section class="difficulty-card">
+          <div class="panel-header">
+            <h3>Difficulty</h3>
+            <p class="panel-sub">-5 favors Orks, +5 favors Dwarves</p>
+          </div>
+          <div class="difficulty-buttons">
+            <button
+              v-for="level in difficultyLevels"
+              :key="level"
+              type="button"
+              class="difficulty-button"
+              :class="{ active: difficulty === level }"
+              @click="difficulty = level"
+            >
+              {{ level }}
+            </button>
+          </div>
+        </section>
         <div class="status-card">
           <div class="status-line">
             <Brain class="icon" />
-            <span>{{ aiThinking ? "Black is thinking..." : gameOver ? "Final verdict" : "Awaiting move" }}</span>
+            <span>{{ aiThinking ? "Ork is thinking..." : gameOver ? "Final verdict" : "Awaiting move" }}</span>
           </div>
           <div class="status-message">
             {{ gameMessage }}
@@ -1033,7 +1127,6 @@ const aiMove = (preparedMoves: LegalMove[]) => {
   height: 1rem;
 }
 
-.back-button,
 .secondary-button {
   display: inline-flex;
   align-items: center;
@@ -1075,7 +1168,7 @@ const aiMove = (preparedMoves: LegalMove[]) => {
 
 .top-actions {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 0.75rem;
   width: 100%;
 }
@@ -1117,6 +1210,44 @@ const aiMove = (preparedMoves: LegalMove[]) => {
   padding: 1rem;
   background: rgba(2, 6, 23, 0.7);
   min-width: 240px;
+}
+
+.difficulty-card {
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 1rem;
+  padding: 1rem;
+  background: rgba(2, 6, 23, 0.7);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.difficulty-buttons {
+  display: grid;
+  grid-template-columns: repeat(11, minmax(0, 1fr));
+  gap: 0.4rem;
+}
+
+.difficulty-button {
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.8);
+  color: inherit;
+  font-weight: 600;
+  border-radius: 0.6rem;
+  padding: 0.35rem 0;
+  font-size: 0.75rem;
+  transition: transform 0.1s ease, border-color 0.1s ease, color 0.1s ease;
+}
+
+.difficulty-button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(129, 140, 248, 0.8);
+}
+
+.difficulty-button.active {
+  border-color: rgba(56, 189, 248, 0.9);
+  box-shadow: 0 0 0 2px rgba(14, 116, 144, 0.35);
+  color: #e2e8f0;
 }
 
 .status-line {
@@ -1187,24 +1318,37 @@ const aiMove = (preparedMoves: LegalMove[]) => {
   margin: 0 auto;
 }
 
-.capture-overlay {
+.capture-video {
   position: absolute;
   inset: 0;
-  pointer-events: none;
-  z-index: 3;
-}
-
-.capture-overlay img {
-  position: absolute;
-  top: var(--capture-top);
-  left: var(--capture-left);
-  transform: translate(-50%, -50%);
-  width: calc(100% / 8 * 0.72);
-  height: calc(100% / 8 * 0.72);
+  width: 100%;
+  height: 100%;
   object-fit: contain;
+  pointer-events: none;
+  background-color: transparent;
+  mix-blend-mode: screen;
   filter:
+    brightness(1)
     drop-shadow(0 2px 6px rgba(15, 23, 42, 0.6))
     drop-shadow(0 0 4px rgba(248, 250, 252, 0.35));
+  z-index: 30;
+  display: block;
+  animation: capture-fade var(--capture-duration, 800ms) linear forwards;
+}
+
+@keyframes capture-fade {
+  0% {
+    opacity: 0;
+  }
+  25% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
 }
 
 .last-move-layer {
@@ -1254,6 +1398,16 @@ const aiMove = (preparedMoves: LegalMove[]) => {
   transform-origin: center;
   filter: drop-shadow(0 2px 6px rgba(15, 23, 42, 0.6));
   transform: translate(0, 0);
+}
+
+.lingering-capture {
+  position: absolute;
+  width: 72%;
+  height: 72%;
+  object-fit: contain;
+  pointer-events: none;
+  z-index: 2;
+  filter: drop-shadow(0 2px 6px rgba(15, 23, 42, 0.6));
 }
 
 .piece-img.animating {
@@ -1354,6 +1508,12 @@ const aiMove = (preparedMoves: LegalMove[]) => {
   display: flex;
   flex-direction: column;
   gap: 1rem;
+}
+
+@media (max-width: 640px) {
+  .difficulty-buttons {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
 }
 
 .status-list {
