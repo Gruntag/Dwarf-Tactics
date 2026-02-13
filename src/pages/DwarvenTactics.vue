@@ -17,6 +17,7 @@ import blackKing from "@/assets/chess_pieces/black-king.png";
 import grassTexture from "@/assets/texture-grass-field.jpg";
 import groundTexture from "@/assets/photo-ground-texture-pattern.jpg";
 import captureAnimation from "@/assets/fight2.gif";
+import { pickAiMove } from "@/lib/orkishAi";
 import {
   BOARD_SIZE,
   assessBoardState,
@@ -28,7 +29,6 @@ import {
   getStateSnapshot,
   initialCastlingRights,
   isKingInCheck,
-  pickAiMove,
   type AppliedState,
   type BoardMatrix,
   type CastlingRights,
@@ -405,7 +405,7 @@ const aiMove = (preparedMoves: LegalMove[]) => {
         </div>
       </div>
       <div class="top-actions">
-        <button type="button" class="secondary-button" @click="resetGame">
+        <button type="button" class="secondary-button" data-testid="reset-match" @click="resetGame">
           <RotateCcw class="icon" />
           Reset Match
         </button>
@@ -434,6 +434,7 @@ const aiMove = (preparedMoves: LegalMove[]) => {
             type="button"
             class="difficulty-button"
             :class="{ active: difficulty === level }"
+            :data-testid="`difficulty-${level}`"
             @click="difficulty = level"
           >
             {{ level }}
@@ -477,6 +478,7 @@ const aiMove = (preparedMoves: LegalMove[]) => {
                 :key="`${rowIndex}-${colIndex}`"
                 type="button"
                 class="board-square"
+                :data-testid="`board-square-${rowIndex}-${colIndex}`"
                 :class="[
                   (rowIndex + colIndex) % 2 === 0 ? 'light' : 'dark',
                   { selected: selectedSquare && selectedSquare.row === rowIndex && selectedSquare.col === colIndex },
@@ -558,7 +560,7 @@ const aiMove = (preparedMoves: LegalMove[]) => {
             <h3>Move Log</h3>
             <p class="panel-sub">All moves (latest first)</p>
           </div>
-          <ul class="log-list">
+          <ul class="log-list" data-testid="move-log">
             <li v-if="!moveHistory.length" class="empty">No moves recorded yet.</li>
             <li v-for="entry in moveHistory" :key="entry">{{ entry }}</li>
           </ul>
